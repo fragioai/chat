@@ -1,0 +1,29 @@
+name: Dateien entpacken
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZIP-Datei im Hauptordner entpacken
+        run: |
+          set -e
+          ZIP=$(ls -1 *.zip 2>/dev/null | head -n 1 || true)
+          if [ -z "$ZIP" ]; then
+            echo "FEHLER: Keine ZIP-Datei im Hauptordner des Repositories gefunden."
+            exit 1
+          fi
+          echo "Entpacke $ZIP"
+          unzip -o "$ZIP" -x ".github/*" "__MACOSX/*"
+          rm "$ZIP"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Dateien aus ZIP entpackt" || echo "Keine Änderungen"
+          git push
