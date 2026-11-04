@@ -163,13 +163,17 @@ Deno.serve(async (req) => {
     chatId = c.id;
   }
 
+  // Ab hier existiert der Chat: Fehlerantworten enthalten die Chat-ID, damit die App ihn öffnen kann.
+  const failChat = (code: string, status: number, message: string) =>
+    jsonResponse({ error: code, message, chat_id: chatId }, status);
+
   // Wiederholte Anfrage-ID? Dann nichts doppelt tun.
   const dup = await admin.from('reservations').select('status').eq('request_id', requestId).maybeSingle();
-  if (dup.data) return fail('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
+  if (dup.data) return failChat('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
 
   if (editId) {
     const { data: em } = await admin.from('messages').select('id, role, created_at').eq('id', editId).eq('chat_id', chatId).eq('user_id', user.id).maybeSingle();
-    if (!em || em.role !== 'user') return fail('not_found', 404, 'Nachricht nicht gefunden.');
+    if (!em || em.role !== 'user') return failChat('not_found', 404, 'Nachricht nicht gefunden.');
     await admin.from('messages').delete().eq('chat_id', chatId).gte('created_at', em.created_at);
   } else if (regenerate) {
     const { data: last } = await admin.from('messages').select('id, role').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1);
@@ -181,7 +185,7 @@ Deno.serve(async (req) => {
     const { data: um, error: me } = await admin.from('messages')
       .insert({ chat_id: chatId, user_id: user.id, role: 'user', content: text, request_id: requestId, model_id: modelId })
       .select('id').single();
-    if (me || !um) { console.error('chat: Nachricht speichern', me?.message); return fail('internal', 500, 'Serverfehler.'); }
+    if (me || !um) { console.error('chat: Nachricht speichern', me?.message); return failChat('internal', 500, 'Serverfehler.'); }
     userMessageId = um.id;
   }
 
@@ -189,7 +193,7 @@ Deno.serve(async (req) => {
   const history = mergeSameRole(
     (rows ?? []).filter((r) => r.status !== 'error').map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content as string })),
   );
-  if (!history.length || history[history.length - 1].role !== 'user') return fail('bad_request', 400, 'Keine Nutzernachricht vorhanden.');
+  if (!history.length || history[history.length - 1].role !== 'user') return failChat('bad_request', 400, 'Keine Nutzernachricht vorhanden.');
 
   const system =
     `Du bist ein hilfreicher KI-Assistent in der Anwendung "Fragio". Antworte in der Sprache des Nutzers. ` +
@@ -199,19 +203,19 @@ Deno.serve(async (req) => {
   // 6) Schätzung (konservativ, +3 % Puffer) und Reservierung
   const chars = history.reduce((n, h) => n + h.content.length, 0) + system.length;
   const estInput = Math.ceil((Math.ceil(chars / 2) + 1500) * 1.03);
-  if (estInput > m.context_tokens) return fail('chat_too_long', 413, 'Dieser Chat ist zu lang. Bitte beginne einen neuen Chat.');
+  if (estInput > m.context_tokens) return failChat('chat_too_long', 413, 'Dieser Chat ist zu lang. Bitte beginne einen neuen Chat.');
 
   const aff = await admin.rpc('max_affordable_output', {
     p_user: user.id, p_model_id: modelId, p_est_input: estInput, p_search_cap: searchCap, p_cap: m.max_output_cap,
   });
   if (aff.error) {
     const known = DB_ERRORS[aff.error.message];
-    if (known) return fail(aff.error.message, known[0], known[1]);
+    if (known) return failChat(aff.error.message, known[0], known[1]);
     console.error('chat: max_affordable_output', aff.error.message);
-    return fail('internal', 500, 'Serverfehler.');
+    return failChat('internal', 500, 'Serverfehler.');
   }
   const maxOut = Number(aff.data);
-  if (!(maxOut >= 256)) return fail('insufficient_credit', 402, 'Dein Guthaben reicht für diese Anfrage nicht aus.');
+  if (!(maxOut >= 256)) return failChat('insufficient_credit', 402, 'Dein Guthaben reicht für diese Anfrage nicht aus.');
   const reduced = maxOut < m.max_output_cap;
 
   const resv = await admin.rpc('reserve_credit', {
@@ -220,11 +224,11 @@ Deno.serve(async (req) => {
   });
   if (resv.error) {
     const known = DB_ERRORS[resv.error.message];
-    if (known) return fail(resv.error.message, known[0], known[1]);
+    if (known) return failChat(resv.error.message, known[0], known[1]);
     console.error('chat: reserve_credit', resv.error.message);
-    return fail('internal', 500, 'Serverfehler.');
+    return failChat('internal', 500, 'Serverfehler.');
   }
-  if (resv.data?.duplicate) return fail('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
+  if (resv.data?.duplicate) return failChat('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
   const reservedEur = Number(resv.data?.reserved_eur ?? 0);
 
   // 7) Streaming zum Browser. Der Lauf endet nie ohne Abrechnung (auch nicht bei Abbruch).

@@ -58,6 +58,8 @@ export default function App() {
   }
 
   const onAccount = route.startsWith('/konto');
+  const chatMatch = /^\/chat\/([0-9a-f-]{36})$/i.exec(route);
+  const chatId = chatMatch ? chatMatch[1] : null;
   return (
     <div className="shell">
       <header className="topbar">
@@ -75,9 +77,15 @@ export default function App() {
           <button className="btn ghost" onClick={() => supabase.auth.signOut()}>Abmelden</button>
         </div>
       </header>
-      <main className="content">
-        {onAccount ? <AccountPage session={session} /> : <ChatPage />}
-      </main>
+      {onAccount ? (
+        <main className="content">
+          <AccountPage session={session} />
+        </main>
+      ) : (
+        <main className="chat-wrap">
+          <ChatPage chatId={chatId} />
+        </main>
+      )}
     </div>
   );
 }
