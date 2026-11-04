@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase.js';
 import Logo from '../components/Logo.jsx';
 
 const redirectTo = window.location.origin + import.meta.env.BASE_URL;
+// Google-Anmeldung ist vorerst ausgeschaltet. Einschalten: GitHub-Variable VITE_GOOGLE_LOGIN = true
+const GOOGLE_ENABLED = import.meta.env.VITE_GOOGLE_LOGIN === 'true';
 
 function germanError(error) {
   const m = (error && error.message ? error.message : '').toLowerCase();
@@ -133,7 +135,7 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
         </button>
       </form>
 
-      {!recovery && mode !== 'reset' && (
+      {GOOGLE_ENABLED && !recovery && mode !== 'reset' && (
         <>
           <div className="divider"><span>oder</span></div>
           <button className="btn" onClick={google} disabled={busy} type="button">Mit Google fortfahren</button>
