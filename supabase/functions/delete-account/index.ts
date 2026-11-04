@@ -2,7 +2,7 @@
 // Löscht das Konto des angemeldeten Nutzers. Läuft ausschließlich serverseitig.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? 'https://fragio.github.io';
+const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? 'https://fragioai.github.io';
 
 const cors = {
   'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
