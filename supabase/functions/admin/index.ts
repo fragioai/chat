@@ -91,6 +91,7 @@ Deno.serve(async (req) => {
   const need = (cond: boolean, msg = 'Ungültige Eingabe.') => { if (!cond) throw Object.assign(new Error(msg), { bad: true }); };
   const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
   const confirmed = p.confirm === 'BESTÄTIGEN';
+  const dec = (v: unknown) => String(v ?? '').trim().replace(/\s/g, '').replace(',', '.');
   const sensitive = () => { need(reason.length >= 5, REASON_MSG); need(confirmed, 'Bitte tippe zur Bestätigung BESTÄTIGEN.'); };
 
   try {
@@ -140,9 +141,9 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       case 'adjust_credit': {
         need(UUID.test(String(p.user_id))); sensitive();
-        const amount = Number(p.amount);
-        need(isFinite(amount));
-        return json(await rpc('admin_adjust_credit', { p_admin: user.id, p_user: p.user_id, p_amount: String(p.amount), p_reason: reason }));
+        const amountStr = dec(p.amount);
+        need(/^-?\d+(\.\d{1,8})?$/.test(amountStr), 'Der Betrag ist ungültig.');
+        return json(await rpc('admin_adjust_credit', { p_admin: user.id, p_user: p.user_id, p_amount: amountStr, p_reason: reason }));
       }
       case 'set_model_status':
         need(typeof p.model_id === 'string'); sensitive();
@@ -154,7 +155,7 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       case 'add_price': {
         sensitive();
-        const n = (v: unknown) => (v === '' || v === null || v === undefined ? null : Number(v));
+        const n = (v: unknown) => (v === '' || v === null || v === undefined ? null : Number(dec(v)));
         const input = n(p.input), output = n(p.output);
         need(typeof p.model_id === 'string' && input !== null && output !== null && input >= 0 && output >= 0);
         const cr = n(p.cache_read), cw = n(p.cache_write), search = n(p.search) ?? 0;
@@ -178,7 +179,7 @@ Deno.serve(async (req) => {
       }
       case 'update_setting':
         need(typeof p.key === 'string'); sensitive();
-        await rpc('admin_update_setting', { p_admin: user.id, p_key: p.key, p_value: String(p.value), p_reason: reason });
+        await rpc('admin_update_setting', { p_admin: user.id, p_key: p.key, p_value: dec(p.value), p_reason: reason });
         return json({ ok: true });
       case 'release_reservation':
         need(UUID.test(String(p.request_id))); sensitive();
