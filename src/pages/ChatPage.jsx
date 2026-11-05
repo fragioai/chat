@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
-import { streamChat } from '../lib/api.js';
+import { streamChat, cancelChat } from '../lib/api.js';
 import { formatEur } from '../lib/format.js';
 import Markdown, { CopyButton } from '../components/Markdown.jsx';
 import Sidebar from '../components/Sidebar.jsx';
@@ -32,12 +32,16 @@ export default function ChatPage({ chatId }) {
   const [editing, setEditing] = useState(null);
   const [editText, setEditText] = useState('');
   const [showJump, setShowJump] = useState(false);
+  const [lost, setLost] = useState(null);       // { requestId, chatId }: Verbindung ging verloren, Antwort läuft evtl. weiter
+  const [checking, setChecking] = useState(false);
 
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
   const stick = useRef(true);
   const skipLoad = useRef(null);
   const textareaRef = useRef(null);
+  const activeReq = useRef(null);
+  const userStopped = useRef(false);
 
   const model = useMemo(() => models.find((m) => m.id === modelId) || null, [models, modelId]);
 
@@ -134,11 +138,13 @@ export default function ChatPage({ chatId }) {
   }, [messages, status]);
 
   // ---------- Senden ----------
-  async function send({ text = '', regenerate = false, editId = null }) {
+  async function send({ text = '', regenerate = false, editId = null, continueId = null }) {
     if (streaming) return;
-    setError(''); setNotice(''); setStatus('');
+    setError(''); setNotice(''); setStatus(''); setLost(null);
     stick.current = true;
     const requestId = crypto.randomUUID();
+    activeReq.current = requestId;
+    userStopped.current = false;
     const { data: sess } = await supabase.auth.getSession();
     if (!sess.session) { setError('Bitte melde dich erneut an.'); return; }
 
@@ -150,10 +156,13 @@ export default function ChatPage({ chatId }) {
       } else if (regenerate && base.length && base[base.length - 1].role === 'assistant') {
         base = base.slice(0, -1);
       }
+      if (continueId) return base.map((m) => (m.id === continueId ? { ...m, streaming: true } : m));
       if (!regenerate) base.push({ id: `tmp-${requestId}`, role: 'user', content: text });
       base.push({ id: 'streaming', role: 'assistant', content: '', streaming: true });
       return base;
     });
+    const targetId = continueId || 'streaming';
+    const baseText = continueId ? (messages.find((m) => m.id === continueId)?.content || '') : '';
 
     setStreaming(true);
     const ac = new AbortController();
@@ -162,27 +171,30 @@ export default function ChatPage({ chatId }) {
     let acc = '';
     let done = null;
     let failure = null;
+    let gotStart = false;
 
     try {
       await streamChat(
         {
           request_id: requestId, model_id: modelId, effort, web_search: webSearch, text,
           chat_id: chatId || undefined, regenerate, edit_message_id: editId || undefined,
+          continue_message_id: continueId || undefined,
         },
         sess.session.access_token,
         (ev) => {
           if (ev.type === 'start') {
+            gotStart = true;
             useChatId = ev.chat_id;
             if (ev.reduced) setNotice('Die Antwortlänge wurde wegen deines Guthabens begrenzt.');
           } else if (ev.type === 'delta') {
             acc += ev.text;
             setStatus('');
-            setMessages((prev) => prev.map((m) => (m.id === 'streaming' ? { ...m, content: acc } : m)));
+            setMessages((prev) => prev.map((m) => (m.id === targetId ? { ...m, content: baseText + acc } : m)));
           } else if (ev.type === 'thinking') setStatus('Denkt nach …');
           else if (ev.type === 'searching') setStatus('Sucht im Web …');
           else if (ev.type === 'notice' && ev.code === 'max_tokens') setNotice('Die Antwort wurde wegen der Längenbegrenzung gekürzt.');
           else if (ev.type === 'done') done = ev;
-          else if (ev.type === 'error') failure = new Error(ev.message);
+          else if (ev.type === 'error') { failure = new Error(ev.message); failure.code = ev.code || 'provider_error'; }
         },
         ac.signal,
       );
@@ -196,13 +208,27 @@ export default function ChatPage({ chatId }) {
     abortRef.current = null;
     setStreaming(false);
     setStatus('');
-    if (failure) setError(failure.message || 'Die Anfrage ist fehlgeschlagen.');
-    if (done && done.timeout) setNotice('Zeitlimit erreicht: Die Antwort wurde gekürzt und geschätzt abgerechnet.');
-    if (!done && !failure) setNotice('Abgebrochen. Die bis dahin erzeugte Antwort wird geschätzt abgerechnet.');
+    const stoppedByUser = userStopped.current;
+    // Verbindung verloren (z. B. App gewechselt oder Netz weg): Server rechnet weiter, wir fragen nur auf Knopfdruck nach.
+    const connectionLost = !done && !stoppedByUser && (!failure || failure.code === undefined);
+    if (connectionLost) {
+      setLost({ requestId, chatId: useChatId, text });
+      setNotice('Die Verbindung wurde unterbrochen. Falls die Anfrage angekommen ist, wird die Antwort auf dem Server weiter erzeugt. Tippe auf „Prüfen, ob die Antwort fertig ist“.');
+    } else {
+      if (failure) setError(failure.message || 'Die Anfrage ist fehlgeschlagen.');
+      if (done && done.status === 'truncated') setNotice('Die Antwort wurde gekürzt (Zeit- oder Längenlimit). Mit „Fortsetzen“ schreibt das Modell weiter.');
+      if (!done && stoppedByUser) setNotice('Gestoppt. Bis dahin erzeugte Teile werden nach tatsächlicher Nutzung abgerechnet.');
+    }
 
+    if (connectionLost) {
+      // Angezeigten Teil stehen lassen; geladen wird erst beim Knopf „Prüfen“.
+      setMessages((prev) => prev.map((m) => (m.id === targetId ? { ...m, id: continueId || 'partial', streaming: false } : m)));
+      loadBalance();
+      return;
+    }
     if (useChatId) {
       if (!chatId) { skipLoad.current = useChatId; window.location.hash = `#/chat/${useChatId}`; }
-      if (!done) await new Promise((r) => setTimeout(r, 1500));
+      if (!done) await new Promise((r) => setTimeout(r, stoppedByUser ? 3500 : 1500));
       await loadMessages(useChatId);
       if (done && done.message_id) {
         setMeta((p) => ({ ...p, [done.message_id]: {
@@ -215,7 +241,38 @@ export default function ChatPage({ chatId }) {
     loadChats(true, query);
   }
 
-  function stop() { if (abortRef.current) abortRef.current.abort(); }
+  async function stop() {
+    userStopped.current = true;
+    const { data: sess } = await supabase.auth.getSession();
+    if (activeReq.current && sess.session) cancelChat(activeReq.current, sess.session.access_token);
+    if (abortRef.current) abortRef.current.abort();
+  }
+
+  async function checkAnswer() {
+    if (!lost) return;
+    setChecking(true); setError('');
+    const { data: st, error: err } = await supabase.rpc('request_status', { p_request_id: lost.requestId });
+    if (err) { setError('Die Prüfung hat nicht geklappt. Bitte versuche es gleich noch einmal.'); setChecking(false); return; }
+    if (st === 'reserved') {
+      setNotice('Die Antwort wird noch erzeugt. Bitte tippe in einer Minute noch einmal auf „Prüfen“.');
+      setChecking(false);
+      return;
+    }
+    const targetChat = lost.chatId || chatId;
+    if (st === null && lost.text) setInput(lost.text);   // Anfrage kam nicht an: Text zurück ins Eingabefeld
+    if (targetChat) {
+      if (!chatId) { skipLoad.current = targetChat; window.location.hash = `#/chat/${targetChat}`; }
+      await loadMessages(targetChat);
+    } else {
+      setMessages([]);
+    }
+    setLost(null);
+    setNotice(st === 'settled' ? 'Die Antwort ist fertig und abgerechnet.'
+      : st === 'released' || st === 'expired' ? 'Die Anfrage wurde ohne Antwort beendet und nicht berechnet. Du kannst „Antwort anfordern“ oder „Neu generieren“ nutzen.'
+      : 'Die Anfrage ist nicht beim Server angekommen. Bitte sende sie erneut.');
+    loadBalance(); loadChats(true, query);
+    setChecking(false);
+  }
 
   function submit() {
     const text = input.trim();
@@ -297,7 +354,8 @@ export default function ChatPage({ chatId }) {
                     <>
                       {m.streaming && !m.content ? <p className="muted">{status || 'Wird geschrieben …'}</p> : <Markdown text={m.content} />}
                       {m.streaming && m.content && status && <p className="muted">{status}</p>}
-                      {m.status === 'aborted' && <p className="muted">Abgebrochen.</p>}
+                      {m.status === 'aborted' && <p className="muted">Gestoppt.</p>}
+                      {m.status === 'truncated' && <p className="muted">Gekürzt (Zeit- oder Längenlimit).</p>}
                     </>
                   )}
                   {!m.streaming && (
@@ -306,7 +364,10 @@ export default function ChatPage({ chatId }) {
                       {m.role === 'user' && !m.id.startsWith('tmp-') && (
                         <button className="btn small ghost" disabled={streaming} onClick={() => { setEditing(m.id); setEditText(m.content); }}>Bearbeiten</button>
                       )}
-                      {m.role === 'assistant' && m.id === lastAssistantId && (
+                      {m.role === 'assistant' && m.id === lastAssistantId && (m.status === 'truncated' || m.status === 'aborted') && !lost && (
+                        <button className="btn small primary" disabled={streaming} onClick={() => send({ continueId: m.id })}>Fortsetzen</button>
+                      )}
+                      {m.role === 'assistant' && m.id === lastAssistantId && !lost && (
                         <button className="btn small ghost" disabled={streaming} onClick={() => send({ regenerate: true })}>Neu generieren</button>
                       )}
                     </div>
@@ -328,7 +389,14 @@ export default function ChatPage({ chatId }) {
               )}
             </article>
           ))}
-          {needsAnswer && (
+          {lost && (
+            <div className="retry">
+              <button className="btn primary" onClick={checkAnswer} disabled={checking}>
+                {checking ? 'Prüfe …' : 'Prüfen, ob die Antwort fertig ist'}
+              </button>
+            </div>
+          )}
+          {needsAnswer && !lost && (
             <div className="retry">
               <p className="muted">Auf deine letzte Nachricht gibt es noch keine Antwort.</p>
               <button className="btn small primary" onClick={() => send({ regenerate: true })}>Antwort anfordern</button>

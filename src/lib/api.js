@@ -50,3 +50,16 @@ export async function streamChat(body, accessToken, onEvent, signal) {
     }
   }
 }
+
+// Stopp-Wunsch an den Server: Er beendet die laufende Antwort und rechnet bis dahin ab.
+export async function cancelChat(requestId, accessToken) {
+  try {
+    await fetch(`${BASE}/functions/v1/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}`, apikey: ANON },
+      body: JSON.stringify({ cancel_request_id: requestId }),
+    });
+  } catch {
+    /* Netzwerkfehler: der Server beendet die Antwort spätestens nach dem Zeitlimit */
+  }
+}

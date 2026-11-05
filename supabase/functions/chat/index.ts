@@ -111,7 +111,15 @@ Deno.serve(async (req) => {
   // 2) Eingaben prüfen (nichts vom Client wird als Preis, Rolle oder Zahl vertraut)
   let b: Record<string, unknown>;
   try { b = await req.json(); } catch { return fail('bad_request', 400, 'Ungültige Anfrage.'); }
+  // Stopp-Wunsch: nur eine Markierung setzen, die laufende Funktion beendet sich selbst und rechnet ab.
+  if (b.cancel_request_id) {
+    const rid = String(b.cancel_request_id);
+    if (!UUID.test(rid)) return fail('bad_request', 400, 'Ungültige Anfrage.');
+    await admin.rpc('request_cancel', { p_request_id: rid, p_user: user.id });
+    return jsonResponse({ ok: true });
+  }
   const requestId = String(b.request_id ?? '');
+  const continueId = b.continue_message_id ? String(b.continue_message_id) : '';
   const modelId = String(b.model_id ?? '');
   const text = typeof b.text === 'string' ? b.text.trim() : '';
   const regenerate = b.regenerate === true;
@@ -120,7 +128,8 @@ Deno.serve(async (req) => {
   if (!UUID.test(requestId) || !modelId) return fail('bad_request', 400, 'Ungültige Anfrage.');
   if (chatIdIn && !UUID.test(chatIdIn)) return fail('bad_request', 400, 'Ungültige Anfrage.');
   if (editId && !UUID.test(editId)) return fail('bad_request', 400, 'Ungültige Anfrage.');
-  if (!regenerate && !text) return fail('empty_message', 400, 'Bitte gib eine Nachricht ein.');
+  if (continueId && (!UUID.test(continueId) || !chatIdIn)) return fail('bad_request', 400, 'Ungültige Anfrage.');
+  if (!regenerate && !continueId && !text) return fail('empty_message', 400, 'Bitte gib eine Nachricht ein.');
   if (text.length > MAX_INPUT_CHARS) return fail('message_too_long', 413, 'Die Nachricht ist zu lang.');
   if (regenerate && !chatIdIn) return fail('bad_request', 400, 'Ungültige Anfrage.');
 
@@ -172,6 +181,7 @@ Deno.serve(async (req) => {
   const failChat = (code: string, status: number, message: string) =>
     jsonResponse({ error: code, message, chat_id: chatId }, status);
 
+  let continueBase = '';
   // Wiederholte Anfrage-ID? Dann nichts doppelt tun.
   const dup = await admin.from('reservations').select('status').eq('request_id', requestId).maybeSingle();
   if (dup.data) return failChat('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
@@ -180,13 +190,18 @@ Deno.serve(async (req) => {
     const { data: em } = await admin.from('messages').select('id, role, created_at').eq('id', editId).eq('chat_id', chatId).eq('user_id', user.id).maybeSingle();
     if (!em || em.role !== 'user') return failChat('not_found', 404, 'Nachricht nicht gefunden.');
     await admin.from('messages').delete().eq('chat_id', chatId).gte('created_at', em.created_at);
+  } else if (continueId) {
+    const { data: lastRows } = await admin.from('messages').select('id, role, content, status').eq('chat_id', chatId).eq('user_id', user.id).order('created_at', { ascending: false }).limit(1);
+    const lm = lastRows?.[0];
+    if (!lm || lm.id !== continueId || lm.role !== 'assistant' || lm.status === 'error') return failChat('not_found', 404, 'Diese Antwort kann nicht fortgesetzt werden.');
+    continueBase = lm.content as string;
   } else if (regenerate) {
     const { data: last } = await admin.from('messages').select('id, role').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1);
     if (last?.[0]?.role === 'assistant') await admin.from('messages').delete().eq('id', last[0].id);
   }
 
   let userMessageId: string | null = null;
-  if (!regenerate) {
+  if (!regenerate && !continueId) {
     const { data: um, error: me } = await admin.from('messages')
       .insert({ chat_id: chatId, user_id: user.id, role: 'user', content: text, request_id: requestId, model_id: modelId })
       .select('id').single();
@@ -198,6 +213,7 @@ Deno.serve(async (req) => {
   const history = mergeSameRole(
     (rows ?? []).filter((r) => r.status !== 'error').map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content as string })),
   );
+  if (continueId) history.push({ role: 'user', content: 'Setze deine letzte Antwort genau an der Stelle fort, an der sie endet. Wiederhole nichts und beginne nicht neu.' });
   if (!history.length || history[history.length - 1].role !== 'user') return failChat('bad_request', 400, 'Keine Nutzernachricht vorhanden.');
 
   const system =
@@ -243,6 +259,16 @@ Deno.serve(async (req) => {
   const ac = new AbortController();
   let clientGone = false;
   let timedOut = false;
+  let cancelled = false;
+  let lastCancelCheck = 0;
+  // Stopp-Markierung des Nutzers höchstens alle 3 Sekunden prüfen.
+  const pollCancel = async () => {
+    if (Date.now() - lastCancelCheck < 3000) return false;
+    lastCancelCheck = Date.now();
+    const { data: rc } = await admin.from('reservations').select('cancel_requested').eq('request_id', requestId).maybeSingle();
+    if (rc?.cancel_requested) { cancelled = true; ac.abort(); return true; }
+    return false;
+  };
   const timer = setTimeout(() => { timedOut = true; ac.abort(); }, DEADLINE_MS);
   const enc = new TextEncoder();
   let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -305,6 +331,7 @@ Deno.serve(async (req) => {
       } else if (m.provider === 'anthropic') {
         const queries = new Set<string>();
         for await (const ev of sseEvents(res)) {
+          if (await pollCancel()) break;
           let j: any;
           try { j = JSON.parse(ev.data); } catch { continue; }
           switch (j.type) {
@@ -346,6 +373,7 @@ Deno.serve(async (req) => {
       } else {
         const queries = new Set<string>();
         for await (const ev of sseEvents(res)) {
+          if (await pollCancel()) break;
           let j: any;
           try { j = JSON.parse(ev.data); } catch { continue; }
           const cand = j.candidates?.[0];
@@ -372,13 +400,13 @@ Deno.serve(async (req) => {
       }
     } catch (e) {
       if (timedOut) { outcome = 'aborted'; errCode = 'timeout'; }
-      else if (clientGone || (e as Error)?.name === 'AbortError') { outcome = 'aborted'; }
+      else if (cancelled || (e as Error)?.name === 'AbortError') { outcome = 'aborted'; }
       else { console.error('chat: Laufzeitfehler', String(e)); outcome = 'error'; errCode = 'provider_unavailable'; errDetail = String(e).slice(0, 300); }
     } finally {
       clearTimeout(timer);
     }
 
-    if (clientGone && outcome === 'complete') outcome = 'aborted';
+    if (cancelled && outcome === 'complete') outcome = 'aborted';
     if (outcome === 'error' || errCode === 'timeout') {
       try {
         await admin.rpc('log_api_error', {
@@ -416,11 +444,20 @@ Deno.serve(async (req) => {
       console.error('chat: Abrechnung fehlgeschlagen', requestId, String(e));
     }
 
+    const hitLimit = stopReason === 'max_tokens' || stopReason === 'MAX_TOKENS';
+    const msgStatus = outcome === 'error' ? 'error'
+      : (errCode === 'timeout' || (outcome === 'complete' && hitLimit)) ? 'truncated'
+      : outcome === 'aborted' ? 'aborted' : 'complete';
     let messageId: string | null = null;
-    if (answer.length > 0) {
+    if (continueId) {
+      if (answer.length > 0) {
+        await admin.from('messages').update({ content: continueBase + answer, status: msgStatus === 'error' ? 'truncated' : msgStatus }).eq('id', continueId);
+      }
+      messageId = continueId;
+    } else if (answer.length > 0) {
       const { data: am } = await admin.from('messages').insert({
         chat_id: chatId, user_id: user.id, role: 'assistant', content: answer,
-        status: outcome === 'complete' ? 'complete' : outcome, model_id: modelId, request_id: requestId,
+        status: msgStatus, model_id: modelId, request_id: requestId,
       }).select('id').single();
       messageId = am?.id ?? null;
     }
@@ -431,7 +468,7 @@ Deno.serve(async (req) => {
           : 'Die Anfrage konnte nicht abgeschlossen werden. Es wurde nichts berechnet, soweit keine Antwort kam.' });
     } else {
       send({
-        type: 'done', message_id: messageId, stop_reason: stopReason, aborted: outcome === 'aborted',
+        type: 'done', message_id: messageId, stop_reason: stopReason, aborted: outcome === 'aborted', status: msgStatus,
         timeout: errCode === 'timeout', sources,
         usage: { input: u.input, output: u.output, cache_read: u.cacheRead, cache_write: u.cacheWrite, search: u.search },
         charged_eur: settled?.charged_eur ?? null, total_eur: settled?.total_eur ?? null,
@@ -448,7 +485,8 @@ Deno.serve(async (req) => {
       const rt = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
       if (rt?.waitUntil) rt.waitUntil(p);
     },
-    cancel() { clientGone = true; ac.abort(); },
+    // Verbindung des Browsers weg (z. B. App gewechselt): Antwort wird auf dem Server zu Ende erzeugt und gespeichert.
+    cancel() { clientGone = true; },
   });
 
   return new Response(stream, {
