@@ -29,6 +29,8 @@ const Status = ({ error, loading }) => (
 const Stat = ({ label, value, warn, sub }) => (
   <div className={`stat ${warn ? 'warn' : ''}`}><span className="muted">{label}</span><strong>{value}</strong>{sub && <span className="muted tiny">{sub}</span>}</div>
 );
+// iPhone-Zahlenblock liefert Komma statt Punkt und kein Minuszeichen: hier vereinheitlichen.
+const dec = (v) => String(v ?? '').trim().replace(/\s/g, '').replace(',', '.');
 const tag = (s) => <span className={`tag ${s}`}>{s}</span>;
 
 // ------------------------------------------------------------------ Übersicht
@@ -102,6 +104,7 @@ export function Overview() {
 function UserDetail({ id, onClose, onChanged }) {
   const { data: u, error, loading, reload } = useAdmin('user_detail', { user_id: id }, [id]);
   const [amount, setAmount] = useState('');
+  const [direction, setDirection] = useState('plus');
   const act = async (action, params) => { await adminCall(action, { user_id: id, ...params }); await reload(); onChanged(); };
   return (
     <section className="card">
@@ -122,9 +125,19 @@ function UserDetail({ id, onClose, onChanged }) {
             submitLabel={u.status === 'blocked' ? 'Entsperren' : 'Sperren'}
             onSubmit={(f) => act('set_user_status', { status: u.status === 'blocked' ? 'active' : 'blocked', ...f })} />
           <SensitiveForm title="Guthaben korrigieren" submitLabel="Buchung ausführen"
-            onSubmit={(f) => act('adjust_credit', { amount, ...f }).then(() => setAmount(''))}>
-            <label>Betrag in Euro (positiv = gutschreiben, negativ = abziehen)
-              <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="z. B. 5 oder -2.50" />
+            onSubmit={(f) => {
+              const a = dec(amount);
+              if (!/^\d+(\.\d{1,8})?$/.test(a) || Number(a) === 0) throw new Error('Bitte einen Betrag größer 0 eingeben, zum Beispiel 5 oder 2,50.');
+              return act('adjust_credit', { amount: direction === 'minus' ? `-${a}` : a, ...f }).then(() => setAmount(''));
+            }}>
+            <label>Art der Buchung
+              <select value={direction} onChange={(e) => setDirection(e.target.value)}>
+                <option value="plus">Gutschreiben (+)</option>
+                <option value="minus">Abziehen (−)</option>
+              </select>
+            </label>
+            <label>Betrag in Euro (ohne Vorzeichen)
+              <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="z. B. 5 oder 2,50" />
             </label>
           </SensitiveForm>
           <h3>Letzte Buchungen</h3>
@@ -229,7 +242,7 @@ export function ModelsPrices() {
         <SensitiveForm title="Alle aktiven Preise als geprüft bestätigen" submitLabel="Bestätigen"
           onSubmit={(x) => run('confirm_prices', x)} />
         <SensitiveForm title="Neue Preisversion eintragen (ab sofort gültig)" submitLabel="Preis speichern"
-          onSubmit={(x) => run('add_price', { ...f, ...x })}>
+          onSubmit={(x) => run('add_price', { model_id: f.model_id, input: dec(f.input), output: dec(f.output), cache_read: dec(f.cache_read), cache_write: dec(f.cache_write), search: dec(f.search), ...x })}>
           <label>Modell-ID
             <select value={f.model_id} onChange={(e) => setF({ ...f, model_id: e.target.value })}>
               <option value="">bitte wählen</option>
@@ -330,7 +343,7 @@ export function Settings() {
           rows={data?.rows} onRow={(r) => { if (SETTING_LABELS[r.key]) { setKey(r.key); setValue(r.value); } }} />
         <p className="muted tiny">Der vereinbarte Aufschlag von 10 % darf nur nach Absprache geändert werden. Jede Änderung wird protokolliert.</p>
       </section>
-      <SensitiveForm title="Einstellung ändern" submitLabel="Speichern" onSubmit={async (x) => { await adminCall('update_setting', { key, value, ...x }); reload(); }}>
+      <SensitiveForm title="Einstellung ändern" submitLabel="Speichern" onSubmit={async (x) => { await adminCall('update_setting', { key, value: dec(value), ...x }); reload(); }}>
         <label>Einstellung
           <select value={key} onChange={(e) => setKey(e.target.value)}>
             {Object.entries(SETTING_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
