@@ -5,6 +5,8 @@ import { useTheme } from './lib/theme.js';
 import AuthPage from './pages/AuthPage.jsx';
 import ChatPage from './pages/ChatPage.jsx';
 import AccountPage from './pages/AccountPage.jsx';
+import AdminPage from './pages/AdminPage.jsx';
+import { adminCall } from './lib/admin.js';
 import Logo from './components/Logo.jsx';
 
 export default function App() {
@@ -13,6 +15,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(false);
   const [recovery, setRecovery] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -33,6 +36,11 @@ export default function App() {
       sub.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!session) { setIsAdmin(false); return; }
+    adminCall('whoami').then((w) => setIsAdmin(!!w.is_admin)).catch(() => setIsAdmin(false));
+  }, [session]);
 
   if (configError) {
     return (
@@ -58,6 +66,7 @@ export default function App() {
   }
 
   const onAccount = route.startsWith('/konto');
+  const onAdmin = route.startsWith('/admin');
   const chatMatch = /^\/chat\/([0-9a-f-]{36})$/i.exec(route);
   const chatId = chatMatch ? chatMatch[1] : null;
   return (
@@ -67,8 +76,9 @@ export default function App() {
           <Logo />
         </a>
         <nav aria-label="Hauptnavigation" className="nav">
-          <a href="#/" aria-current={onAccount ? undefined : 'page'}>Chat</a>
+          <a href="#/" aria-current={onAccount || onAdmin ? undefined : 'page'}>Chat</a>
           <a href="#/konto" aria-current={onAccount ? 'page' : undefined}>Konto</a>
+          {isAdmin && <a href="#/admin" aria-current={onAdmin ? 'page' : undefined}>Admin</a>}
         </nav>
         <div className="topbar-actions">
           <button className="btn ghost" onClick={toggle} aria-label="Zwischen hellem und dunklem Design wechseln">
@@ -77,7 +87,11 @@ export default function App() {
           <button className="btn ghost" onClick={() => supabase.auth.signOut()}>Abmelden</button>
         </div>
       </header>
-      {onAccount ? (
+      {onAdmin ? (
+        <main className="content wide">
+          <AdminPage />
+        </main>
+      ) : onAccount ? (
         <main className="content">
           <AccountPage session={session} />
         </main>

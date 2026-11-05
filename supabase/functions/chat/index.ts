@@ -125,9 +125,14 @@ Deno.serve(async (req) => {
   if (regenerate && !chatIdIn) return fail('bad_request', 400, 'Ungültige Anfrage.');
 
   // 3) Rate Limit, Aufräumen, Wechselkurs
-  const rl = await admin.rpc('check_rate_limit', { p_user: user.id, p_bucket: 'chat', p_limit: 12, p_window_seconds: 60 });
+  const { data: rlSetting } = await admin.from('app_settings').select('value').eq('key', 'rate_limit_per_minute').maybeSingle();
+  const rlLimit = Math.max(1, Math.min(120, Number(rlSetting?.value) || 12));
+  const rl = await admin.rpc('check_rate_limit', { p_user: user.id, p_bucket: 'chat', p_limit: rlLimit, p_window_seconds: 60 });
   if (rl.error) { console.error('chat: rate limit', rl.error.message); return fail('internal', 500, 'Serverfehler.'); }
-  if (rl.data === false) return fail('rate_limited', 429, 'Zu viele Anfragen. Bitte warte einen Moment.');
+  if (rl.data === false) {
+    await admin.rpc('log_security_event', { p_type: 'rate_limited', p_user: user.id, p_details: { limit_per_minute: rlLimit } });
+    return fail('rate_limited', 429, 'Zu viele Anfragen. Bitte warte einen Moment.');
+  }
   await admin.rpc('expire_stale_reservations');
   await ensureFx(admin);
 
@@ -223,6 +228,9 @@ Deno.serve(async (req) => {
     p_est_input: estInput, p_max_output: maxOut, p_search_cap: searchCap,
   });
   if (resv.error) {
+    if (resv.error.message === 'account_blocked' || resv.error.message === 'too_many_concurrent') {
+      await admin.rpc('log_security_event', { p_type: resv.error.message, p_user: user.id, p_details: { model: modelId } });
+    }
     const known = DB_ERRORS[resv.error.message];
     if (known) return failChat(resv.error.message, known[0], known[1]);
     console.error('chat: reserve_credit', resv.error.message);
@@ -250,6 +258,8 @@ Deno.serve(async (req) => {
     let stopReason = '';
     let outcome: 'complete' | 'aborted' | 'error' = 'complete';
     let errCode = '';
+    let httpStatus = 0;
+    let errDetail = '';
     const sources: { title: string; url: string }[] = [];
     const seen = new Set<string>();
     const addSource = (title: string, link: string) => {
@@ -289,6 +299,7 @@ Deno.serve(async (req) => {
       if (!res.ok) {
         const detail = (await res.text()).slice(0, 500);
         console.error(`chat: Anbieter-Fehler ${m.provider} HTTP ${res.status}: ${detail}`);
+        httpStatus = res.status; errDetail = detail;
         outcome = 'error';
         errCode = res.status === 429 ? 'provider_rate_limited' : res.status === 401 || res.status === 403 ? 'provider_auth' : res.status >= 500 ? 'provider_unavailable' : 'provider_rejected';
       } else if (m.provider === 'anthropic') {
@@ -327,7 +338,7 @@ Deno.serve(async (req) => {
             }
             case 'error':
               console.error('chat: Anthropic-Stream-Fehler', JSON.stringify(j.error ?? {}).slice(0, 300));
-              outcome = 'error'; errCode = 'provider_error';
+              outcome = 'error'; errCode = 'provider_error'; errDetail = JSON.stringify(j.error ?? {}).slice(0, 300);
               break;
           }
         }
@@ -362,12 +373,20 @@ Deno.serve(async (req) => {
     } catch (e) {
       if (timedOut) { outcome = 'aborted'; errCode = 'timeout'; }
       else if (clientGone || (e as Error)?.name === 'AbortError') { outcome = 'aborted'; }
-      else { console.error('chat: Laufzeitfehler', String(e)); outcome = 'error'; errCode = 'provider_unavailable'; }
+      else { console.error('chat: Laufzeitfehler', String(e)); outcome = 'error'; errCode = 'provider_unavailable'; errDetail = String(e).slice(0, 300); }
     } finally {
       clearTimeout(timer);
     }
 
     if (clientGone && outcome === 'complete') outcome = 'aborted';
+    if (outcome === 'error' || errCode === 'timeout') {
+      try {
+        await admin.rpc('log_api_error', {
+          p_request_id: requestId, p_user: user.id, p_model: modelId, p_provider: m.provider,
+          p_code: errCode || 'provider_error', p_status: httpStatus || null, p_detail: errDetail,
+        });
+      } catch { /* Protokoll darf die Abrechnung nie verhindern */ }
+    }
     if (outcome === 'complete' && !providerUsage) {
       // Anbieter hat keine Nutzungsdaten geliefert -> Schätzung weiter unten
     }
