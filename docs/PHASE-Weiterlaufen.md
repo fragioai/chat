@@ -44,3 +44,32 @@ Ein bezahlter Supabase-Tarif erlaubt laut Supabase-Doku eine längere Laufzeit d
 - Der Stopp wirkt mit einigen Sekunden Verzögerung. Bis dahin entstehende Tokens werden berechnet.
 - Wenn du nach einem Verbindungsverlust sofort neu sendest, statt zu prüfen, laufen zwei Anfragen. Jede wird einzeln abgerechnet, gleichzeitig sind höchstens 3 Anfragen pro Nutzer erlaubt. Prüfe deshalb zuerst mit dem Knopf, damit nichts doppelt entsteht.
 - Nicht live getestet: bitte Auffälligkeiten melden.
+
+---
+
+# Nachtrag: Gedanken lesen (live und in jeder Antwort)
+
+## Warum
+Bei großen Aufgaben (zum Beispiel ein Code-Projekt) denken Opus und Fable zuerst lange nach. Dann gab es bis zum Zeitlimit keinen sichtbaren Text. Jetzt sehen Nutzer die Gedanken **live**, und sie bleiben an der Antwort gespeichert.
+
+## Was du siehst
+- Während die Antwort entsteht: Ein aufgeklappter Block **„Gedanken (live)“** über der Antwort, solange noch kein Antworttext da ist. Sobald der Antworttext beginnt, klappt er zu.
+- Danach an jeder Antwort mit Gedanken: **„Gedanken lesen“** zum Aufklappen.
+- Läuft das Zeitlimit ab, bevor ein Antworttext entstand: Die Gedanken bleiben gespeichert, die Nachricht zeigt „Es wurde noch keine Antwort geschrieben.“, dazu der Hinweis, eine niedrigere Denkstärke zu wählen oder die Aufgabe zu teilen. Es gibt dann **keine leere Nachricht** mehr. **Fortsetzen** erscheint nur, wenn schon Antworttext existiert, sonst **Neu generieren**.
+
+## Wichtige Grenzen (ehrlich)
+- Es sind **Zusammenfassungen** der Gedanken, nicht der rohe Gedankengang. Laut Anthropic-Doku liefert kein Einstellung den Rohtext. Das gilt für alle Claude-Modelle.
+- Das Modell entscheidet selbst, ob und wie viel es denkt. Bei einfachen Fragen gibt es oft keine oder nur wenige Gedanken. „In jeder Antwort“ heißt deshalb: in jeder Antwort, bei der das Modell Gedanken liefert.
+- Die Zusammenfassung kommt manchmal in größeren Stücken, nicht Wort für Wort.
+- Gedanken werden **auch berechnet, wenn man sie nicht sieht**. Die Anzeige ändert nichts an den Kosten.
+- Gedanken sind auf 60.000 Zeichen pro Antwort begrenzt gespeichert.
+- Gemini ist abgeschaltet und bekommt diese Anzeige erst, wenn wir es einschalten.
+
+## Einrichtung
+1. Diese ZIP hochladen und entpacken (ersetzt die vorherige Version dieses Pakets).
+2. SQL Editor: `supabase/migrations/0008_gedanken.sql` ausführen. Falls du `0007_weiterlaufen.sql` noch nicht ausgeführt hast, zuerst diese.
+3. Edge Function `chat` erneut durch den neuen Inhalt von `supabase/functions/chat/index.ts` ersetzen und **Deploy**.
+4. Test (braucht den Anthropic-Zugang): Mit Opus oder Fable und Denkstärke „Gründlich“ eine anspruchsvolle Frage stellen. Oben erscheint „Gedanken (live)“, danach „Gedanken lesen“.
+
+## Abrechnung bei Zeitlimit ohne Antworttext
+Unabhängig von der Anzeige gilt: Hat der Anbieter keine Nutzungsdaten geliefert, wird geschätzt, mindestens aus Textlänge **und** Laufzeit (mindestens 25 Tokens pro Sekunde Ausgabe). Dadurch zahlt der Nutzer für das, was das Modell bis zum Zeitlimit tatsächlich gearbeitet hat. Der Wert 25 ist eine dokumentierte Annahme von mir und lässt sich ändern.

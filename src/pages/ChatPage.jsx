@@ -103,7 +103,7 @@ export default function ChatPage({ chatId }) {
   const loadMessages = useCallback(async (id) => {
     if (!id) { setMessages([]); return; }
     const { data, error: err } = await supabase.from('messages')
-      .select('id, role, content, status, model_id, created_at')
+      .select('id, role, content, status, thinking, model_id, created_at')
       .eq('chat_id', id).order('created_at', { ascending: true });
     if (err) { setError('Der Chat konnte nicht geladen werden.'); return; }
     setMessages(data || []);
@@ -163,6 +163,8 @@ export default function ChatPage({ chatId }) {
     });
     const targetId = continueId || 'streaming';
     const baseText = continueId ? (messages.find((m) => m.id === continueId)?.content || '') : '';
+    const baseThink = continueId ? (messages.find((m) => m.id === continueId)?.thinking || '') : '';
+    let think = '';
 
     setStreaming(true);
     const ac = new AbortController();
@@ -190,7 +192,11 @@ export default function ChatPage({ chatId }) {
             acc += ev.text;
             setStatus('');
             setMessages((prev) => prev.map((m) => (m.id === targetId ? { ...m, content: baseText + acc } : m)));
-          } else if (ev.type === 'thinking') setStatus('Denkt nach …');
+          } else if (ev.type === 'thinking_delta') {
+            think += ev.text;
+            setStatus('');
+            setMessages((prev) => prev.map((m) => (m.id === targetId ? { ...m, thinking: baseThink + (baseThink && think ? '\n\n' : '') + think } : m)));
+          } else if (ev.type === 'thinking') setStatus((cur) => cur || 'Denkt nach …');
           else if (ev.type === 'searching') setStatus('Sucht im Web …');
           else if (ev.type === 'notice' && ev.code === 'max_tokens') setNotice('Die Antwort wurde wegen der Längenbegrenzung gekürzt.');
           else if (ev.type === 'done') done = ev;
@@ -216,7 +222,8 @@ export default function ChatPage({ chatId }) {
       setNotice('Die Verbindung wurde unterbrochen. Falls die Anfrage angekommen ist, wird die Antwort auf dem Server weiter erzeugt. Tippe auf „Prüfen, ob die Antwort fertig ist“.');
     } else {
       if (failure) setError(failure.message || 'Die Anfrage ist fehlgeschlagen.');
-      if (done && done.status === 'truncated') setNotice('Die Antwort wurde gekürzt (Zeit- oder Längenlimit). Mit „Fortsetzen“ schreibt das Modell weiter.');
+      if (done && done.status === 'truncated' && !done.has_answer) setNotice('Zeitlimit erreicht, bevor eine sichtbare Antwort entstand (das Modell hat nur nachgedacht). Wähle eine niedrigere Denkstärke oder teile die Aufgabe auf. Die angefallenen Kosten werden geschätzt abgerechnet.');
+      else if (done && done.status === 'truncated') setNotice('Die Antwort wurde gekürzt (Zeit- oder Längenlimit). Mit „Fortsetzen“ schreibt das Modell weiter.');
       if (!done && stoppedByUser) setNotice('Gestoppt. Bis dahin erzeugte Teile werden nach tatsächlicher Nutzung abgerechnet.');
     }
 
@@ -352,7 +359,15 @@ export default function ChatPage({ chatId }) {
                 <div className={`bubble ${m.role}`}>
                   {m.role === 'user' ? <p className="plain">{m.content}</p> : (
                     <>
-                      {m.streaming && !m.content ? <p className="muted">{status || 'Wird geschrieben …'}</p> : <Markdown text={m.content} />}
+                      {m.thinking && (
+                        <details className="thinking" open={!!m.streaming && !m.content}>
+                          <summary>{m.streaming && !m.content ? 'Gedanken (live)' : 'Gedanken lesen'}</summary>
+                          <Markdown text={m.thinking} />
+                        </details>
+                      )}
+                      {m.streaming && !m.content ? <p className="muted">{status || 'Wird geschrieben …'}</p>
+                        : m.content ? <Markdown text={m.content} />
+                        : <p className="muted">Es wurde noch keine Antwort geschrieben.</p>}
                       {m.streaming && m.content && status && <p className="muted">{status}</p>}
                       {m.status === 'aborted' && <p className="muted">Gestoppt.</p>}
                       {m.status === 'truncated' && <p className="muted">Gekürzt (Zeit- oder Längenlimit).</p>}
@@ -364,7 +379,7 @@ export default function ChatPage({ chatId }) {
                       {m.role === 'user' && !m.id.startsWith('tmp-') && (
                         <button className="btn small ghost" disabled={streaming} onClick={() => { setEditing(m.id); setEditText(m.content); }}>Bearbeiten</button>
                       )}
-                      {m.role === 'assistant' && m.id === lastAssistantId && (m.status === 'truncated' || m.status === 'aborted') && !lost && (
+                      {m.role === 'assistant' && m.id === lastAssistantId && (m.status === 'truncated' || m.status === 'aborted') && !!m.content && !lost && (
                         <button className="btn small primary" disabled={streaming} onClick={() => send({ continueId: m.id })}>Fortsetzen</button>
                       )}
                       {m.role === 'assistant' && m.id === lastAssistantId && !lost && (

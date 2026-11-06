@@ -8,6 +8,7 @@ const DEADLINE_MS = 140_000;           // Free-Tarif: ca. 150 s Laufzeit pro Anf
 const CLAUDE_SEARCH_CAP = 3;           // max. Websuchen pro Antwort (Claude)
 const GEMINI_SEARCH_CAP = 5;           // Reservierung für Google-Suchanfragen pro Antwort
 const MAX_INPUT_CHARS = 32_000;
+const EST_TOKENS_PER_SECOND = 25;     // Untergrenze der Schätzung bei Zeitlimit ohne Nutzungsdaten (dokumentiert, im Admin änderbar in einer späteren Version)
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const cors = {
@@ -182,6 +183,7 @@ Deno.serve(async (req) => {
     jsonResponse({ error: code, message, chat_id: chatId }, status);
 
   let continueBase = '';
+  let continueThinking = '';
   // Wiederholte Anfrage-ID? Dann nichts doppelt tun.
   const dup = await admin.from('reservations').select('status').eq('request_id', requestId).maybeSingle();
   if (dup.data) return failChat('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
@@ -191,10 +193,11 @@ Deno.serve(async (req) => {
     if (!em || em.role !== 'user') return failChat('not_found', 404, 'Nachricht nicht gefunden.');
     await admin.from('messages').delete().eq('chat_id', chatId).gte('created_at', em.created_at);
   } else if (continueId) {
-    const { data: lastRows } = await admin.from('messages').select('id, role, content, status').eq('chat_id', chatId).eq('user_id', user.id).order('created_at', { ascending: false }).limit(1);
+    const { data: lastRows } = await admin.from('messages').select('id, role, content, status, thinking').eq('chat_id', chatId).eq('user_id', user.id).order('created_at', { ascending: false }).limit(1);
     const lm = lastRows?.[0];
     if (!lm || lm.id !== continueId || lm.role !== 'assistant' || lm.status === 'error') return failChat('not_found', 404, 'Diese Antwort kann nicht fortgesetzt werden.');
     continueBase = lm.content as string;
+    continueThinking = (lm.thinking as string | null) ?? '';
   } else if (regenerate) {
     const { data: last } = await admin.from('messages').select('id, role').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1);
     if (last?.[0]?.role === 'assistant') await admin.from('messages').delete().eq('id', last[0].id);
@@ -211,7 +214,7 @@ Deno.serve(async (req) => {
 
   const { data: rows } = await admin.from('messages').select('role, content, status').eq('chat_id', chatId).order('created_at', { ascending: true });
   const history = mergeSameRole(
-    (rows ?? []).filter((r) => r.status !== 'error').map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content as string })),
+    (rows ?? []).filter((r) => r.status !== 'error' && (r.role === 'user' || String(r.content).length > 0)).map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content as string })),
   );
   if (continueId) history.push({ role: 'user', content: 'Setze deine letzte Antwort genau an der Stelle fort, an der sie endet. Wiederhole nichts und beginne nicht neu.' });
   if (!history.length || history[history.length - 1].role !== 'user') return failChat('bad_request', 400, 'Keine Nutzernachricht vorhanden.');
@@ -283,6 +286,9 @@ Deno.serve(async (req) => {
     let providerUsage = false;
     let stopReason = '';
     let outcome: 'complete' | 'aborted' | 'error' = 'complete';
+    const startedAt = Date.now();
+    let thinkChars = 0;
+    let thinkText = '';
     let errCode = '';
     let httpStatus = 0;
     let errDetail = '';
@@ -300,6 +306,7 @@ Deno.serve(async (req) => {
         const body: Record<string, unknown> = {
           model: m.api_model_id, max_tokens: maxOut, stream: true, system,
           messages: history, output_config: { effort },
+          thinking: { type: 'adaptive', display: 'summarized' },
         };
         if (useSearch) body.tools = [{ type: 'web_search_20260209', name: 'web_search', max_uses: CLAUDE_SEARCH_CAP }];
         res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -351,6 +358,12 @@ Deno.serve(async (req) => {
               break;
             }
             case 'content_block_delta':
+              if (j.delta?.type === 'thinking_delta' && j.delta.thinking) {
+                const t = String(j.delta.thinking);
+                thinkChars += t.length;
+                if (thinkText.length < 60_000) thinkText += t;
+                send({ type: 'thinking_delta', text: t });
+              }
               if (j.delta?.type === 'text_delta' && j.delta.text) { answer += j.delta.text; send({ type: 'delta', text: j.delta.text }); }
               break;
             case 'message_delta': {
@@ -378,7 +391,7 @@ Deno.serve(async (req) => {
           try { j = JSON.parse(ev.data); } catch { continue; }
           const cand = j.candidates?.[0];
           for (const p of cand?.content?.parts ?? []) {
-            if (p.thought) { send({ type: 'thinking' }); continue; }
+            if (p.thought) { thinkChars += String(p.text ?? '').length; send({ type: 'thinking' }); continue; }
             if (typeof p.text === 'string' && p.text) { answer += p.text; send({ type: 'delta', text: p.text }); }
           }
           const gm = cand?.groundingMetadata;
@@ -430,7 +443,10 @@ Deno.serve(async (req) => {
       } else {
         if (source === 'estimated') {
           u.input = Math.max(u.input, estInput);
-          u.output = Math.max(u.output, Math.ceil(answer.length / 2.5));
+          // Schätzung: sichtbarer Text plus Denktext; bei Zeitlimit mindestens Laufzeit x Tokens pro Sekunde.
+          const byText = Math.ceil((answer.length + thinkChars) / 2.5);
+          const byTime = errCode === 'timeout' ? Math.ceil(((Date.now() - startedAt) / 1000) * EST_TOKENS_PER_SECOND) : 0;
+          u.output = Math.max(u.output, byText, byTime);
         }
         const s = await admin.rpc('settle_request', {
           p_request_id: requestId, p_input: u.input, p_output: u.output, p_cache_read: u.cacheRead,
@@ -450,14 +466,17 @@ Deno.serve(async (req) => {
       : outcome === 'aborted' ? 'aborted' : 'complete';
     let messageId: string | null = null;
     if (continueId) {
-      if (answer.length > 0) {
-        await admin.from('messages').update({ content: continueBase + answer, status: msgStatus === 'error' ? 'truncated' : msgStatus }).eq('id', continueId);
+      if (answer.length > 0 || thinkText.length > 0) {
+        await admin.from('messages').update({
+          content: continueBase + answer, thinking: (continueThinking + (thinkText ? (continueThinking ? '\n\n' : '') + thinkText : '')) || null,
+          status: msgStatus === 'error' ? 'truncated' : msgStatus,
+        }).eq('id', continueId);
       }
       messageId = continueId;
-    } else if (answer.length > 0) {
+    } else if (answer.length > 0 || thinkText.length > 0) {
       const { data: am } = await admin.from('messages').insert({
-        chat_id: chatId, user_id: user.id, role: 'assistant', content: answer,
-        status: msgStatus, model_id: modelId, request_id: requestId,
+        chat_id: chatId, user_id: user.id, role: 'assistant', content: answer, thinking: thinkText || null,
+        status: msgStatus === 'error' ? 'truncated' : msgStatus, model_id: modelId, request_id: requestId,
       }).select('id').single();
       messageId = am?.id ?? null;
     }
@@ -468,7 +487,7 @@ Deno.serve(async (req) => {
           : 'Die Anfrage konnte nicht abgeschlossen werden. Es wurde nichts berechnet, soweit keine Antwort kam.' });
     } else {
       send({
-        type: 'done', message_id: messageId, stop_reason: stopReason, aborted: outcome === 'aborted', status: msgStatus,
+        type: 'done', message_id: messageId, stop_reason: stopReason, aborted: outcome === 'aborted', status: msgStatus, has_answer: answer.length > 0,
         timeout: errCode === 'timeout', sources,
         usage: { input: u.input, output: u.output, cache_read: u.cacheRead, cache_write: u.cacheWrite, search: u.search },
         charged_eur: settled?.charged_eur ?? null, total_eur: settled?.total_eur ?? null,
