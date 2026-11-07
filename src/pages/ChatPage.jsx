@@ -373,6 +373,13 @@ export default function ChatPage({ chatId }) {
   const needsAnswer = !streaming && last && last.role === 'user';
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
   const noCredit = balance !== null && balance <= 0;
+  // Obergrenze der Kosten für die nächste Anfrage (Schätzung vor dem Senden)
+  const worstCase = useMemo(() => {
+    if (!model || model.price_eur_in == null) return null;
+    const chars = messages.reduce((n, m) => n + (m.content ? m.content.length : 0), 0) + input.length + 400;
+    const estIn = Math.ceil(chars / 2) + 1500;
+    return (estIn * Number(model.price_eur_in) + Number(model.max_output_cap) * Number(model.price_eur_out)) / 1e6;
+  }, [model, messages, input]);
 
   return (
     <div className="chat-layout">
@@ -549,6 +556,12 @@ export default function ChatPage({ chatId }) {
             </p>
           )}
 
+          {worstCase !== null && (worstCase >= 0.25 || (balance !== null && worstCase > balance)) && (
+            <p className="msg warn" role="status">
+              Diese Anfrage kann bis zu ca. {formatEur(worstCase)} kosten (Obergrenze, meist deutlich weniger).
+              {balance !== null && worstCase > balance ? ' Dein Guthaben reicht eventuell nicht für die volle Länge, die Antwort wird dann entsprechend gekürzt.' : ''}
+            </p>
+          )}
           {quota && <p className="muted tiny">Dateispeicher: {formatBytes(quota.used)} von {formatBytes(quota.user_limit)} belegt. Höchstens {formatBytes(quota.max_file)} pro Datei.</p>}
           <div className="input-row">
             <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
