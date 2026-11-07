@@ -329,6 +329,9 @@ const SETTING_LABELS = {
   price_max_age_days: 'Preise gelten höchstens so viele Tage ohne Bestätigung', fx_max_age_hours: 'Wechselkurs höchstens so viele Stunden alt',
   max_concurrent_requests: 'Gleichzeitige Anfragen pro Nutzer', rate_limit_per_minute: 'Anfragen pro Minute und Nutzer',
   reservation_ttl_minutes: 'Offene Reservierungen verfallen nach (Minuten)',
+  max_file_bytes: 'Größte erlaubte Datei (Bytes, höchstens 6291456)', max_user_bytes: 'Speicher pro Nutzer (Bytes)',
+  max_total_bytes: 'Gesamtspeicher aller Nutzer (Bytes)', max_files_per_message: 'Dateien pro Nachricht',
+  provider_file_ttl_days: 'Kopien beim KI-Anbieter löschen nach (Tagen)',
 };
 export function Settings() {
   const { data, error, loading, reload } = useAdmin('settings_list', {}, []);

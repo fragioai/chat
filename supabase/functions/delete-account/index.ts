@@ -85,6 +85,23 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Dateien des Nutzers löschen: Speicherobjekte und Kopien beim KI-Anbieter
+  const { data: userFiles } = await admin.from('files').select('storage_path, provider_file_id').eq('user_id', user.id);
+  const paths = (userFiles ?? []).map((f: { storage_path: string }) => f.storage_path);
+  for (let i = 0; i < paths.length; i += 100) await admin.storage.from('user-files').remove(paths.slice(i, i + 100));
+  const aKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (aKey) {
+    for (const f of userFiles ?? []) {
+      if (!f.provider_file_id) continue;
+      try {
+        await fetch(`https://api.anthropic.com/v1/files/${f.provider_file_id}`, {
+          method: 'DELETE', signal: AbortSignal.timeout(10000),
+          headers: { 'x-api-key': aKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'files-api-2025-04-14' },
+        });
+      } catch { /* wird nicht blockieren */ }
+    }
+  }
+
   await admin.from('profiles').update({ status: 'deletion_requested' }).eq('id', user.id);
 
   const { error: deleteError } = await admin.auth.admin.deleteUser(user.id);

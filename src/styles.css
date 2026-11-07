@@ -164,3 +164,19 @@ tr.clickable:hover { background: var(--bg); }
 .thinking { border: 1px solid var(--border); border-radius: 10px; padding: .4rem .7rem; margin: 0 0 .6rem; background: var(--bg); }
 .thinking summary { cursor: pointer; color: var(--muted); font-size: .92rem; min-height: 32px; display: flex; align-items: center; }
 .thinking .md { color: var(--muted); font-size: .94rem; }
+
+/* ---------- Dateien ---------- */
+.chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .4rem; }
+.chip { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; font-size: .88rem; max-width: 100%; }
+button.chip { cursor: pointer; }
+.chip.bad { border-color: var(--danger); }
+.chip .x { background: none; border: 0; color: var(--muted); font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0 .2rem; min-width: 28px; min-height: 28px; }
+.filecard { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; border: 1px solid var(--border); border-radius: 12px; padding: .6rem .75rem; margin: .5rem 0; background: var(--surface); }
+.fname { overflow-wrap: anywhere; }
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; padding: env(safe-area-inset-top, 0px) 0 0; }
+.modal-box { background: var(--surface); width: min(100%, 900px); max-height: 94dvh; border-radius: 16px 16px 0 0; padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: .5rem; overflow: hidden; }
+.preview { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: .5rem; background: var(--bg); }
+.preview img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.preview iframe { width: 100%; height: 60dvh; border: 0; background: #fff; }
+.plainpre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; font-size: .85rem; }
+.ziplist { margin: 0; padding-left: 1.1rem; font-family: ui-monospace, Menlo, monospace; font-size: .85rem; overflow-wrap: anywhere; }

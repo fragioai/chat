@@ -4,6 +4,8 @@ import { streamChat, cancelChat } from '../lib/api.js';
 import { formatEur } from '../lib/format.js';
 import Markdown, { CopyButton } from '../components/Markdown.jsx';
 import Sidebar from '../components/Sidebar.jsx';
+import FilePreview from '../components/FilePreview.jsx';
+import { ACCEPT, filesCall, formatBytes, uploadFile } from '../lib/files.js';
 
 const PAGE = 30;
 const MODEL_KEY = 'fragio-model';
@@ -32,6 +34,12 @@ export default function ChatPage({ chatId }) {
   const [editing, setEditing] = useState(null);
   const [editText, setEditText] = useState('');
   const [showJump, setShowJump] = useState(false);
+  const [attachments, setAttachments] = useState([]);   // { key, name, size, id?, stage, error? }
+  const [chatFiles, setChatFiles] = useState([]);
+  const [quota, setQuota] = useState(null);
+  const [codeTools, setCodeTools] = useState(true);
+  const [preview, setPreview] = useState(null);
+  const fileInput = useRef(null);
   const [lost, setLost] = useState(null);       // { requestId, chatId }: Verbindung ging verloren, Antwort läuft evtl. weiter
   const [checking, setChecking] = useState(false);
 
@@ -101,13 +109,20 @@ export default function ChatPage({ chatId }) {
   }, [query]);
 
   const loadMessages = useCallback(async (id) => {
-    if (!id) { setMessages([]); return; }
+    if (!id) { setMessages([]); setChatFiles([]); return; }
     const { data, error: err } = await supabase.from('messages')
       .select('id, role, content, status, thinking, model_id, created_at')
       .eq('chat_id', id).order('created_at', { ascending: true });
     if (err) { setError('Der Chat konnte nicht geladen werden.'); return; }
     setMessages(data || []);
+    const { data: fl } = await supabase.from('files').select('id, name, size_bytes, mime, kind, message_id, created_at').eq('chat_id', id).order('created_at', { ascending: true });
+    setChatFiles(fl || []);
   }, []);
+
+  const loadQuota = useCallback(async () => {
+    try { setQuota(await filesCall('quota')); } catch { /* Anzeige ist optional */ }
+  }, []);
+  useEffect(() => { loadQuota(); }, [loadQuota]);
 
   useEffect(() => {
     if (skipLoad.current && skipLoad.current === chatId) { skipLoad.current = null; return; }
@@ -138,7 +153,7 @@ export default function ChatPage({ chatId }) {
   }, [messages, status]);
 
   // ---------- Senden ----------
-  async function send({ text = '', regenerate = false, editId = null, continueId = null }) {
+  async function send({ text = '', regenerate = false, editId = null, continueId = null, sendFiles = [] }) {
     if (streaming) return;
     setError(''); setNotice(''); setStatus(''); setLost(null);
     stick.current = true;
@@ -157,7 +172,7 @@ export default function ChatPage({ chatId }) {
         base = base.slice(0, -1);
       }
       if (continueId) return base.map((m) => (m.id === continueId ? { ...m, streaming: true } : m));
-      if (!regenerate) base.push({ id: `tmp-${requestId}`, role: 'user', content: text });
+      if (!regenerate) base.push({ id: `tmp-${requestId}`, role: 'user', content: text || 'Bitte sieh dir die angehängten Dateien an.' });
       base.push({ id: 'streaming', role: 'assistant', content: '', streaming: true });
       return base;
     });
@@ -181,6 +196,7 @@ export default function ChatPage({ chatId }) {
           request_id: requestId, model_id: modelId, effort, web_search: webSearch, text,
           chat_id: chatId || undefined, regenerate, edit_message_id: editId || undefined,
           continue_message_id: continueId || undefined,
+          file_ids: sendFiles, code_tools: codeTools,
         },
         sess.session.access_token,
         (ev) => {
@@ -198,6 +214,7 @@ export default function ChatPage({ chatId }) {
             setMessages((prev) => prev.map((m) => (m.id === targetId ? { ...m, thinking: baseThink + (baseThink && think ? '\n\n' : '') + think } : m)));
           } else if (ev.type === 'thinking') setStatus((cur) => cur || 'Denkt nach …');
           else if (ev.type === 'searching') setStatus('Sucht im Web …');
+          else if (ev.type === 'working') setStatus(ev.text);
           else if (ev.type === 'notice' && ev.code === 'max_tokens') setNotice('Die Antwort wurde wegen der Längenbegrenzung gekürzt.');
           else if (ev.type === 'done') done = ev;
           else if (ev.type === 'error') { failure = new Error(ev.message); failure.code = ev.code || 'provider_error'; }
@@ -223,6 +240,7 @@ export default function ChatPage({ chatId }) {
     } else {
       if (failure) setError(failure.message || 'Die Anfrage ist fehlgeschlagen.');
       if (done && done.status === 'truncated' && !done.has_answer) setNotice('Zeitlimit erreicht, bevor eine sichtbare Antwort entstand (das Modell hat nur nachgedacht). Wähle eine niedrigere Denkstärke oder teile die Aufgabe auf. Die angefallenen Kosten werden geschätzt abgerechnet.');
+      else if (done && done.skipped_files && done.skipped_files.length) setNotice(`Nicht gespeichert: ${done.skipped_files.join('; ')}`);
       else if (done && done.status === 'truncated') setNotice('Die Antwort wurde gekürzt (Zeit- oder Längenlimit). Mit „Fortsetzen“ schreibt das Modell weiter.');
       if (!done && stoppedByUser) setNotice('Gestoppt. Bis dahin erzeugte Teile werden nach tatsächlicher Nutzung abgerechnet.');
     }
@@ -245,6 +263,7 @@ export default function ChatPage({ chatId }) {
       setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
     }
     loadBalance();
+    loadQuota();
     loadChats(true, query);
   }
 
@@ -283,10 +302,45 @@ export default function ChatPage({ chatId }) {
 
   function submit() {
     const text = input.trim();
-    if (!text || streaming) return;
+    const ready = attachments.filter((a) => a.id && !a.error);
+    if ((!text && !ready.length) || streaming || attachments.some((a) => a.stage && !a.id && !a.error)) return;
     setInput('');
+    setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    send({ text });
+    send({ text, sendFiles: ready.map((a) => a.id) });
+  }
+
+  async function pickFiles(e) {
+    const list = [...(e.target.files || [])];
+    e.target.value = '';
+    const maxPer = quota?.max_per_message || 5;
+    const room = Math.max(0, maxPer - attachments.length);
+    setError('');
+    for (const file of list.slice(0, room)) {
+      const key = `${file.name}-${Date.now()}-${Math.random()}`;
+      if (file.size > (quota?.max_file || 6291456)) {
+        setAttachments((p) => [...p, { key, name: file.name, size: file.size, error: 'Größer als 6 MB' }]);
+        continue;
+      }
+      setAttachments((p) => [...p, { key, name: file.name, size: file.size, stage: 'Prüfe …' }]);
+      try {
+        const f = await uploadFile(file, chatId, (stage) => setAttachments((p) => p.map((a) => (a.key === key ? { ...a, stage } : a))));
+        setAttachments((p) => p.map((a) => (a.key === key ? { ...a, id: f.id, stage: '', size: f.size } : a)));
+      } catch (er) {
+        setAttachments((p) => p.map((a) => (a.key === key ? { ...a, stage: '', error: er.message } : a)));
+      }
+      loadQuota();
+    }
+    if (list.length > room) setError(`Höchstens ${maxPer} Dateien pro Nachricht.`);
+  }
+  async function removeAttachment(a) {
+    setAttachments((p) => p.filter((x) => x.key !== a.key));
+    if (a.id) { try { await filesCall('delete', { file_id: a.id }); } catch { /* wird später aufgeräumt */ } loadQuota(); }
+  }
+  async function deleteFile(f) {
+    try { await filesCall('delete', { file_id: f.id }); } catch (er) { setError(er.message); return; }
+    setChatFiles((p) => p.filter((x) => x.id !== f.id));
+    loadQuota();
   }
 
   function onKeyDown(e) {
@@ -357,6 +411,13 @@ export default function ChatPage({ chatId }) {
                 </div>
               ) : (
                 <div className={`bubble ${m.role}`}>
+                  {m.role === 'user' && chatFiles.filter((f) => f.message_id === m.id).length > 0 && (
+                    <div className="chips">
+                      {chatFiles.filter((f) => f.message_id === m.id).map((f) => (
+                        <button key={f.id} className="chip" onClick={() => setPreview(f)}>{f.name} <span className="muted">{formatBytes(f.size_bytes)}</span></button>
+                      ))}
+                    </div>
+                  )}
                   {m.role === 'user' ? <p className="plain">{m.content}</p> : (
                     <>
                       {m.thinking && (
@@ -367,7 +428,17 @@ export default function ChatPage({ chatId }) {
                       )}
                       {m.streaming && !m.content ? <p className="muted">{status || 'Wird geschrieben …'}</p>
                         : m.content ? <Markdown text={m.content} />
+                        : chatFiles.some((f) => f.message_id === m.id) ? null
                         : <p className="muted">Es wurde noch keine Antwort geschrieben.</p>}
+                      {chatFiles.filter((f) => f.message_id === m.id && f.kind === 'generated').map((f) => (
+                        <div key={f.id} className="filecard">
+                          <div><strong className="fname">{f.name}</strong><br /><span className="muted tiny">{formatBytes(f.size_bytes)}</span></div>
+                          <div className="row">
+                            <button className="btn small primary" onClick={() => setPreview(f)}>Vorschau</button>
+                            <button className="btn small ghost" onClick={() => deleteFile(f)}>Löschen</button>
+                          </div>
+                        </div>
+                      ))}
                       {m.streaming && m.content && status && <p className="muted">{status}</p>}
                       {m.status === 'aborted' && <p className="muted">Gestoppt.</p>}
                       {m.status === 'truncated' && <p className="muted">Gekürzt (Zeit- oder Längenlimit).</p>}
@@ -427,6 +498,16 @@ export default function ChatPage({ chatId }) {
           {modelsError && <p className="msg error" role="alert">{modelsError}</p>}
           {noCredit && <p className="msg error">Dein Guthaben ist leer. Aufladen ist noch nicht möglich.</p>}
 
+          {attachments.length > 0 && (
+            <div className="chips">
+              {attachments.map((a) => (
+                <span key={a.key} className={`chip ${a.error ? 'bad' : ''}`}>
+                  {a.name} <span className="muted">{a.error ? a.error : a.stage ? a.stage : formatBytes(a.size)}</span>
+                  <button type="button" className="x" onClick={() => removeAttachment(a)} aria-label={`${a.name} entfernen`}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="controls">
             <label className="field">
               <span>Modell</span>
@@ -446,6 +527,12 @@ export default function ChatPage({ chatId }) {
                 </select>
               </label>
             )}
+            {model && model.provider === 'anthropic' && (
+              <label className="check">
+                <input type="checkbox" checked={codeTools} onChange={(e) => setCodeTools(e.target.checked)} disabled={streaming} />
+                Dateien erzeugen und Code ausführen
+              </label>
+            )}
             {model && model.supports_web_search && (
               <label className="check">
                 <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} disabled={streaming} />
@@ -462,7 +549,10 @@ export default function ChatPage({ chatId }) {
             </p>
           )}
 
+          {quota && <p className="muted tiny">Dateispeicher: {formatBytes(quota.used)} von {formatBytes(quota.user_limit)} belegt. Höchstens {formatBytes(quota.max_file)} pro Datei.</p>}
           <div className="input-row">
+            <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
+            <button type="button" className="btn" onClick={() => fileInput.current && fileInput.current.click()} disabled={streaming || !model || model.provider !== 'anthropic'} aria-label="Dateien anhängen">Anhängen</button>
             <textarea
               ref={textareaRef} value={input} onChange={autosize} onKeyDown={onKeyDown} rows={1}
               placeholder="Nachricht an Fragio" aria-label="Nachricht" maxLength={32000} disabled={streaming}
@@ -470,11 +560,12 @@ export default function ChatPage({ chatId }) {
             {streaming ? (
               <button className="btn danger-btn" onClick={stop}>Stopp</button>
             ) : (
-              <button className="btn primary" onClick={submit} disabled={!input.trim() || !model || !model.available}>Senden</button>
+              <button className="btn primary" onClick={submit} disabled={(!input.trim() && !attachments.some((a) => a.id)) || !model || !model.available || attachments.some((a) => a.stage && !a.id && !a.error)}>Senden</button>
             )}
           </div>
         </div>
       </section>
+      {preview && <FilePreview file={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }

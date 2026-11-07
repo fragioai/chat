@@ -1,0 +1,22 @@
+name: Dateien aufräumen
+
+on:
+  schedule:
+    - cron: '43 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aufräumen aufrufen
+        env:
+          URL: ${{ vars.VITE_SUPABASE_URL }}
+          ANON: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST "$URL/functions/v1/files" \
+            -H "x-cron-secret: $SECRET" -H "apikey: $ANON" -H "Content-Type: application/json" \
+            -d '{"action":"purge"}')
+          cat resp.json; echo
+          if [ "$code" != "200" ]; then echo "FEHLER: HTTP $code"; exit 1; fi
