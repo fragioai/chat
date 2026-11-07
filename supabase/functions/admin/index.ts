@@ -31,6 +31,8 @@ const DB_MESSAGES: Record<string, string> = {
   value_invalid: 'Ungültiger Wert.',
   key_or_range_invalid: 'Einstellung oder Wertebereich ungültig.',
   key_invalid: 'Einstellung unbekannt.',
+  mail_incomplete: 'Betreff und Text der E-Mail müssen ausgefüllt sein.',
+  mail_limit: 'Höchstens 5 E-Mails pro Nutzer und Tag.',
 };
 
 function jwtClaims(token: string): Record<string, unknown> {
@@ -88,6 +90,19 @@ Deno.serve(async (req) => {
     if (error) throw new Error(error.message);
     return data;
   };
+  // Ausgangsbox sofort abarbeiten lassen (ruft die Funktion "outbox-worker" mit dem Geheimwort auf)
+  const runWorker = async () => {
+    const secret = Deno.env.get('CRON_SECRET');
+    if (!secret) throw Object.assign(new Error('Das Geheimwort CRON_SECRET fehlt in den Supabase-Secrets.'), { bad: true });
+    const r = await fetch(`${url}/functions/v1/outbox-worker`, {
+      method: 'POST', headers: { 'x-cron-secret': secret, 'Content-Type': 'application/json', apikey: serviceKey }, body: '{}',
+      signal: AbortSignal.timeout(100_000),
+    });
+    let j: Record<string, unknown> = {};
+    try { j = await r.json(); } catch { /* keine JSON-Antwort */ }
+    if (r.status === 404) throw Object.assign(new Error('Die Funktion "outbox-worker" ist nicht bereitgestellt.'), { bad: true });
+    return { http: r.status, ...j };
+  };
   const need = (cond: boolean, msg = 'Ungültige Eingabe.') => { if (!cond) throw Object.assign(new Error(msg), { bad: true }); };
   const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
   const confirmed = p.confirm === 'BESTÄTIGEN';
@@ -123,6 +138,16 @@ Deno.serve(async (req) => {
         return json({ rows: ev.data ?? [], rate_top: await rpc('admin_rate_top', {}) });
       }
       case 'audit_list': return json({ rows: (await db.from('admin_audit_log').select('*').order('created_at', { ascending: false }).limit(200)).data ?? [] });
+      case 'outbox_overview': return json(await rpc('outbox_stats', {}));
+      case 'outbox_run': return json(await runWorker());
+      case 'test_email':
+        await rpc('outbox_enqueue_email', { p_to: 'OPERATOR', p_subject: 'Fragio: Testmail', p_body: `Dies ist eine Testmail aus dem Admin-Bereich.\nZeit: ${new Date().toISOString()}`, p_key: `testmail:${crypto.randomUUID()}` });
+        return json(await runWorker());
+      case 'test_sheet': {
+        const id = `testsheet:${crypto.randomUUID()}`;
+        await rpc('outbox_enqueue_sheet', { p_tab: 'Test', p_row: [id, new Date().toISOString(), 'Testzeile aus dem Admin-Bereich'], p_key: id });
+        return json(await runWorker());
+      }
       case 'ledger_check': return json({ rows: await rpc('ledger_consistency', {}) });
       case 'export': {
         need(['usage', 'ledger', 'users', 'audit'].includes(String(p.kind)));
@@ -176,6 +201,18 @@ Deno.serve(async (req) => {
         const n = await rpc('confirm_prices', { p_ids: ids });
         await rpc('admin_log', { p_admin: user.id, p_action: 'confirm_prices', p_target: null, p_details: { count: n, reason } });
         return json({ ok: true, count: n });
+      }
+      case 'retry_dead': {
+        sensitive();
+        const n = await rpc('outbox_retry_dead', { p_admin: user.id, p_reason: reason });
+        return json({ ok: true, count: n });
+      }
+      case 'email_user': {
+        need(UUID.test(String(p.user_id))); sensitive();
+        const id = await rpc('admin_email_user', { p_admin: user.id, p_user: p.user_id, p_subject: String(p.subject ?? '').trim(), p_body: String(p.body ?? '').trim(), p_reason: reason });
+        let sent: unknown = null;
+        try { sent = await runWorker(); } catch { /* wird später zugestellt */ }
+        return json({ ok: true, outbox_id: id, worker: sent });
       }
       case 'update_setting':
         need(typeof p.key === 'string'); sensitive();

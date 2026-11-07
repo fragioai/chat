@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { adminCall } from '../lib/admin.js';
-import { Overview, Users, ModelsPrices, Operations, Settings, Audit, ExportTab, PaymentsInfo } from './AdminSections.jsx';
+import { Overview, Users, ModelsPrices, Operations, Settings, Audit, ExportTab, Integrations } from './AdminSections.jsx';
 
 const TABS = [
   ['overview', 'Übersicht'], ['users', 'Nutzer'], ['models', 'Modelle & Preise'], ['ops', 'Betrieb'],
-  ['settings', 'Einstellungen'], ['audit', 'Protokoll'], ['export', 'Export'], ['payments', 'Zahlungen'],
+  ['settings', 'Einstellungen'], ['audit', 'Protokoll'], ['export', 'Export'], ['integrations', 'Integrationen'],
 ];
 
 // Zwei-Faktor-Schritt: Authenticator-App (TOTP). Ohne Stufe aal2 lehnt der Server jede Aktion ab.
@@ -96,7 +96,7 @@ export default function AdminPage() {
   if (state === 'error') return <section className="card"><h1>Fehler</h1><p>Der Admin-Bereich ist nicht erreichbar. Ist die Funktion „admin“ bereitgestellt?</p><button className="btn" onClick={check}>Erneut versuchen</button></section>;
   if (state === 'mfa') return <MfaGate onDone={check} />;
 
-  const View = { overview: Overview, users: Users, models: ModelsPrices, ops: Operations, settings: Settings, audit: Audit, export: ExportTab, payments: PaymentsInfo }[tab];
+  const View = { overview: Overview, users: Users, models: ModelsPrices, ops: Operations, settings: Settings, audit: Audit, export: ExportTab, integrations: Integrations }[tab];
   return (
     <div className="stack">
       <h1>Administration</h1>

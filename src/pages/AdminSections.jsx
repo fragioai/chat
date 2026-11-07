@@ -105,6 +105,8 @@ function UserDetail({ id, onClose, onChanged }) {
   const { data: u, error, loading, reload } = useAdmin('user_detail', { user_id: id }, [id]);
   const [amount, setAmount] = useState('');
   const [direction, setDirection] = useState('plus');
+  const [subject, setSubject] = useState('');
+  const [mailBody, setMailBody] = useState('');
   const act = async (action, params) => { await adminCall(action, { user_id: id, ...params }); await reload(); onChanged(); };
   return (
     <section className="card">
@@ -139,6 +141,12 @@ function UserDetail({ id, onClose, onChanged }) {
             <label>Betrag in Euro (ohne Vorzeichen)
               <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="z. B. 5 oder 2,50" />
             </label>
+          </SensitiveForm>
+          <SensitiveForm title="E-Mail an den Nutzer senden" submitLabel="E-Mail senden"
+            onSubmit={(f) => act('email_user', { subject, body: mailBody, ...f }).then(() => { setSubject(''); setMailBody(''); })}>
+            <label>Betreff<input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={150} /></label>
+            <label>Text<textarea value={mailBody} onChange={(e) => setMailBody(e.target.value)} rows={5} /></label>
+            <p className="muted tiny">Wird über Gmail an {u.email} gesendet. Höchstens 5 Mails pro Nutzer und Tag. Mit Protokoll.</p>
           </SensitiveForm>
           <h3>Letzte Buchungen</h3>
           <DataTable cols={[
@@ -425,5 +433,63 @@ export function PaymentsInfo() {
         <li>Google-Sheets-Synchronisierung</li>
       </ul>
     </section>
+  );
+}
+
+// ------------------------------------------------------------------ Integrationen (E-Mail, Google Sheets)
+export function Integrations() {
+  const { data, error, loading, reload } = useAdmin('outbox_overview', {}, []);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  async function run(action, label) {
+    setBusy(action); setMsg(''); setErr('');
+    try {
+      const r = await adminCall(action, {});
+      setMsg(`${label}: ${r.note ? `${r.note} ` : ''}gesendet ${r.sent ?? 0}, wiederholt ${r.failed ?? 0}, endgültig fehlgeschlagen ${r.dead ?? 0}. ${(r.details || []).join(' | ')}`);
+      reload();
+    } catch (e) { setErr(e.message); }
+    setBusy('');
+  }
+  const count = (kind, status) => Number((data?.by_kind || []).find((x) => x.kind === kind && x.status === status)?.n || 0);
+  const row = (kind, label) => (
+    <div className="stats">
+      <Stat label={`${label}: wartend`} value={num(count(kind, 'pending'))} />
+      <Stat label={`${label}: wird wiederholt`} value={num(count(kind, 'failed'))} warn={count(kind, 'failed') > 0} />
+      <Stat label={`${label}: endgültig fehlgeschlagen`} value={num(count(kind, 'dead'))} warn={count(kind, 'dead') > 0} />
+    </div>
+  );
+  return (
+    <div className="stack">
+      <section className="card">
+        <h2>E-Mail und Google Sheets</h2>
+        <p className="muted tiny">Ereignisse werden zuerst sicher gespeichert und dann zugestellt. Fällt ein Dienst aus, geht nichts verloren, es wird mit Wartezeiten wiederholt (1, 5, 30, 120, 360, 720 Minuten, dann täglich, höchstens 8 Versuche).</p>
+        <Status error={error} loading={loading} />
+        {data && (<>
+          {row('email', 'E-Mail')}
+          {row('sheet', 'Google Sheets')}
+          <p>Zugestellt in den letzten 24 Stunden: <strong>{num(data.sent_24h)}</strong></p>
+        </>)}
+        <div className="row">
+          <button className="btn" disabled={!!busy} onClick={() => run('outbox_run', 'Verarbeitung')}>Jetzt verarbeiten</button>
+          <button className="btn" disabled={!!busy} onClick={() => run('test_email', 'Testmail')}>Testmail an mich</button>
+          <button className="btn" disabled={!!busy} onClick={() => run('test_sheet', 'Sheet-Test')}>Test-Zeile in Sheet</button>
+        </div>
+        {busy && <p aria-busy="true" className="muted">Wird ausgeführt …</p>}
+        {msg && <p className="msg ok" role="status">{msg}</p>}
+        {err && <p className="msg error" role="alert">{err}</p>}
+        <SensitiveForm title="Fehlgeschlagene Ereignisse erneut versuchen" submitLabel="Erneut versuchen"
+          onSubmit={async (x) => { await adminCall('retry_dead', x); reload(); }} />
+      </section>
+      <section className="card">
+        <h2>Letzte Ereignisse</h2>
+        <DataTable cols={[
+          { key: 'created_at', label: 'Zeit', render: (r) => formatDate(r.created_at) }, { key: 'kind', label: 'Art' },
+          { key: 'status', label: 'Status', render: (r) => tag(r.status === 'sent' ? 'ok' : r.status === 'pending' ? 'pending' : 'failed') },
+          { key: 'attempts', label: 'Versuche', num: true }, { key: 'last_error', label: 'Letzter Fehler', render: (r) => String(r.last_error || '').slice(0, 140) },
+        ]} rows={data?.recent} empty="Noch keine Ereignisse." />
+      </section>
+      <PaymentsInfo />
+    </div>
   );
 }

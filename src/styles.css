@@ -183,3 +183,6 @@ button.chip { cursor: pointer; }
 .msg.warn { color: var(--text); border: 1px solid #c98a00; background: rgba(201,138,0,.12); }
 .detail { background: var(--bg); border-radius: 8px; padding: .25rem .5rem; }
 .detail td, .detail th { white-space: normal; }
+
+.btn.google { display: flex; align-items: center; justify-content: center; gap: .6rem; background: #fff; color: #1f1f1f; border: 1px solid #747775; font-weight: 500; }
+.btn.google:hover { background: #f6f8fc; }
