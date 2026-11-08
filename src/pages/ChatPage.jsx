@@ -15,6 +15,8 @@ const writeLS = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignor
 export default function ChatPage({ chatId }) {
   const [models, setModels] = useState([]);
   const [modelsError, setModelsError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => readLS('fragio-sidebar') === 'closed');
   const [modelId, setModelId] = useState(() => readLS(MODEL_KEY));
   const [effort, setEffort] = useState('');
   const [webSearch, setWebSearch] = useState(false);
@@ -365,6 +367,10 @@ export default function ChatPage({ chatId }) {
     if (id === chatId) window.location.hash = '#/';
     loadChats(true, query);
   }
+  function toggleSidebar() {
+    if (window.innerWidth <= 760) { setSidebarOpen(true); return; }
+    setCollapsed((c) => { writeLS('fragio-sidebar', c ? 'open' : 'closed'); return !c; });
+  }
   function openChat(id) { setSidebarOpen(false); window.location.hash = `#/chat/${id}`; }
   function newChat() { setSidebarOpen(false); window.location.hash = '#/'; setMessages([]); setError(''); setNotice(''); }
 
@@ -386,11 +392,11 @@ export default function ChatPage({ chatId }) {
       <Sidebar
         chats={chats} activeId={chatId} query={query} onQuery={setQuery} hasMore={hasMore}
         onMore={() => loadChats(false)} onNew={newChat} onOpen={openChat} onRename={renameChat}
-        onDelete={deleteChat} open={sidebarOpen} onClose={() => setSidebarOpen(false)} loading={chatsLoading}
+        onDelete={deleteChat} collapsed={collapsed} open={sidebarOpen} onClose={() => setSidebarOpen(false)} loading={chatsLoading}
       />
       <section className="chat-main" aria-label="Chat">
         <div className="chat-bar">
-          <button className="btn small sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Chatverlauf öffnen">Verlauf</button>
+          <button className="btn small sidebar-toggle" onClick={toggleSidebar} aria-label="Chatverlauf ein- oder ausblenden">Verlauf</button>
           <a className="balance" href="#/konto" aria-label="Guthaben, zum Konto">
             Guthaben {balance === null ? '…' : formatEur(balance)}
           </a>
@@ -500,10 +506,10 @@ export default function ChatPage({ chatId }) {
         {showJump && <button className="jump" onClick={jumpToEnd} aria-label="Zum Ende springen">Nach unten</button>}
 
         <div className="composer">
-          {error && <p className="msg error" role="alert">{error}</p>}
-          {notice && <p className="msg ok" role="status">{notice}</p>}
-          {modelsError && <p className="msg error" role="alert">{modelsError}</p>}
-          {noCredit && <p className="msg error">Dein Guthaben ist leer. Aufladen ist noch nicht möglich.</p>}
+          {error && <p className="msg error compact" role="alert"><span>{error}</span><button type="button" className="x" onClick={() => setError('')} aria-label="Meldung schließen">×</button></p>}
+          {notice && <p className="msg ok compact" role="status"><span>{notice}</span><button type="button" className="x" onClick={() => setNotice('')} aria-label="Meldung schließen">×</button></p>}
+          {modelsError && <p className="msg error compact" role="alert">{modelsError}</p>}
+          {noCredit && <p className="msg error compact">Dein Guthaben ist leer. Aufladen ist noch nicht möglich.</p>}
 
           {attachments.length > 0 && (
             <div className="chips">
@@ -515,6 +521,14 @@ export default function ChatPage({ chatId }) {
               ))}
             </div>
           )}
+          <details className="settings" open={settingsOpen} onToggle={(e) => setSettingsOpen(e.currentTarget.open)}>
+            <summary>
+              <span>{model ? model.display_name : 'Modell wählen'}</span>
+              {model && <span className="muted"> · {(model.efforts.find((x) => x.value === effort) || {}).label || ''}</span>}
+              {webSearch && <span className="muted"> · Suche</span>}
+              {model && model.provider === 'anthropic' && !codeTools && <span className="muted"> · ohne Dateierzeugung</span>}
+              <span className="muted"> · Einstellungen</span>
+            </summary>
           <div className="controls">
             <label className="field">
               <span>Modell</span>
@@ -556,13 +570,14 @@ export default function ChatPage({ chatId }) {
             </p>
           )}
 
+            {quota && <p className="muted tiny">Dateispeicher: {formatBytes(quota.used)} von {formatBytes(quota.user_limit)} belegt. Höchstens {formatBytes(quota.max_file)} pro Datei.</p>}
+          </details>
           {worstCase !== null && (worstCase >= 0.25 || (balance !== null && worstCase > balance)) && (
             <p className="msg warn" role="status">
               Diese Anfrage kann bis zu ca. {formatEur(worstCase)} kosten (Obergrenze, meist deutlich weniger).
               {balance !== null && worstCase > balance ? ' Dein Guthaben reicht eventuell nicht für die volle Länge, die Antwort wird dann entsprechend gekürzt.' : ''}
             </p>
           )}
-          {quota && <p className="muted tiny">Dateispeicher: {formatBytes(quota.used)} von {formatBytes(quota.user_limit)} belegt. Höchstens {formatBytes(quota.max_file)} pro Datei.</p>}
           <div className="input-row">
             <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
             <button type="button" className="btn" onClick={() => fileInput.current && fileInput.current.click()} disabled={streaming || !model || model.provider !== 'anthropic'} aria-label="Dateien anhängen">Anhängen</button>

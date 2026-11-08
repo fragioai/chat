@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { formatDate } from '../lib/format.js';
 
 export default function Sidebar({
-  chats, activeId, query, onQuery, hasMore, onMore, onNew, onOpen, onRename, onDelete, open, onClose, loading,
+  chats, activeId, query, onQuery, hasMore, onMore, onNew, onOpen, onRename, onDelete, open, onClose, loading, collapsed,
 }) {
   const [renamingId, setRenamingId] = useState(null);
   const [title, setTitle] = useState('');
@@ -23,7 +23,7 @@ export default function Sidebar({
   return (
     <>
       {open && <div className="scrim" onClick={onClose} aria-hidden="true" />}
-      <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="Chatverlauf">
+      <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`} aria-label="Chatverlauf">
         <div className="sidebar-head">
           <button className="btn primary block" onClick={onNew}>Neuer Chat</button>
           <input

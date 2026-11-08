@@ -80,12 +80,15 @@ export default function App() {
           <a href="#/konto" aria-current={onAccount ? 'page' : undefined}>Konto</a>
           {isAdmin && <a href="#/admin" aria-current={onAdmin ? 'page' : undefined}>Admin</a>}
         </nav>
-        <div className="topbar-actions">
-          <button className="btn ghost" onClick={toggle} aria-label="Zwischen hellem und dunklem Design wechseln">
-            {effective === 'dark' ? 'Hell' : 'Dunkel'}
-          </button>
-          <button className="btn ghost" onClick={() => supabase.auth.signOut()}>Abmelden</button>
-        </div>
+        <details className="menu">
+          <summary className="btn ghost" aria-label="Menü öffnen">Menü</summary>
+          <div className="menu-pop">
+            <button onClick={(e) => { e.currentTarget.closest('details').open = false; toggle(); }}>
+              {effective === 'dark' ? 'Helles Design' : 'Dunkles Design'}
+            </button>
+            <button onClick={() => supabase.auth.signOut()}>Abmelden</button>
+          </div>
+        </details>
       </header>
       {onAdmin ? (
         <main className="content wide">
