@@ -6,55 +6,18 @@
     <meta name="color-scheme" content="light dark" />
     <title>Fragio – KI-Chat</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-
-    <style>
-      /* Fragio-Widget: Immer rechts mittig */
-      #fragio-widget,
-      #fragio-widget button {
-        position: fixed !important;
-        right: 20px !important;
-        top: 50% !important;
-        bottom: auto !important;
-        left: auto !important;
-        transform: translateY(-50%) !important;
-        z-index: 999999 !important;
-      }
-    </style>
   </head>
   <body>
     <div id="root"></div>
     <noscript>Fragio benötigt JavaScript.</noscript>
+
     <script type="module" src="/src/main.jsx"></script>
 
-<!-- Fragio-Widget -->
-<script
-  src="https://ajaronn.github.io/vokdev/widget.js"
-  data-agent="fbb2d4124973"
-  defer
-></script>
-
-<script>
-(function () {
-  function positionWidget() {
-    const host = document.getElementById('kk-agent-host');
-    if (!host) return;
-
-    host.style.setProperty('position', 'fixed', 'important');
-    host.style.setProperty('top', '50%', 'important');
-    host.style.setProperty('right', '16px', 'important');
-    host.style.setProperty('bottom', 'auto', 'important');
-    host.style.setProperty('left', 'auto', 'important');
-    host.style.setProperty('transform', 'translateY(-50%)', 'important');
-    host.style.setProperty('z-index', '2147483000', 'important');
-  }
-
-  new MutationObserver(positionWidget).observe(document.body, {
-    childList: true,
-    subtree: true
-  });
-
-  positionWidget();
-})();
-</script>
+    <!-- Fragio-Widget -->
+    <script
+      src="https://ajaronn.github.io/vokdev/widget.js"
+      data-agent="fbb2d4124973"
+      defer
+    ></script>
   </body>
 </html>
