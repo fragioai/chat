@@ -219,7 +219,7 @@ Deno.serve(async (req) => {
   if (chatIdIn && !UUID.test(chatIdIn)) return fail('bad_request', 400, 'Ungültige Anfrage.');
   if (editId && !UUID.test(editId)) return fail('bad_request', 400, 'Ungültige Anfrage.');
   if (continueId && (!UUID.test(continueId) || !chatIdIn)) return fail('bad_request', 400, 'Ungültige Anfrage.');
-  if (!regenerate && !continueId && !text && !fileIdsIn.length) return fail('empty_message', 400, 'Bitte gib eine Nachricht ein.');
+  if (!regenerate && !continueId && !text && !fileIdsIn.length && b.ephemeral !== true) return fail('empty_message', 400, 'Bitte gib eine Nachricht ein.');
   if (text.length > MAX_INPUT_CHARS) return fail('message_too_long', 413, 'Die Nachricht ist zu lang.');
   if (regenerate && !chatIdIn) return fail('bad_request', 400, 'Ungültige Anfrage.');
 
@@ -269,8 +269,43 @@ Deno.serve(async (req) => {
     newFiles = fr as FileRow[];
   }
 
+  // Chat ohne Speichern: Verlauf kommt vom Browser, nichts wird in der Datenbank gespeichert.
+  const ephemeral = b.ephemeral === true;
+  let ephHistory: Msg[] = [];
+  if (ephemeral) {
+    if (regenerate || continueId || editId || chatIdIn || fileIdsIn.length) return fail('bad_request', 400, 'Ungültige Anfrage.');
+    const raw = Array.isArray(b.history) ? (b.history as { role?: unknown; content?: unknown }[]) : [];
+    if (!raw.length || raw.length > 80) return fail('bad_request', 400, 'Ungültige Anfrage.');
+    let totalChars = 0;
+    for (const h of raw) {
+      if ((h.role !== 'user' && h.role !== 'assistant') || typeof h.content !== 'string' || !h.content.length || h.content.length > MAX_INPUT_CHARS) {
+        return fail('bad_request', 400, 'Ungültige Anfrage.');
+      }
+      totalChars += h.content.length;
+      ephHistory.push({ role: h.role, content: h.content });
+    }
+    if (totalChars > 300_000) return fail('chat_too_long', 413, 'Dieser Chat ist zu lang. Bitte beginne einen neuen Chat.');
+    ephHistory = mergeSameRole(ephHistory);
+    if (!ephHistory.length || ephHistory[ephHistory.length - 1].role !== 'user') return fail('bad_request', 400, 'Ungültige Anfrage.');
+  }
+
+  let chatId = '';
+  let continueBase = '';
+  let continueThinking = '';
+  let userMessageId: string | null = null;
+  let nativeCount = 0, nativeBytes = 0, containerFiles: FileRow[] = [];
+  let history: Msg[] = [];
+  let usingCode = false;
+  const tools: Block[] = [];
+  const failChat = (code: string, status: number, message: string) =>
+    jsonResponse({ error: code, message, chat_id: chatId || null }, status);
+
+  if (ephemeral) {
+    history = ephHistory;
+    if (useSearch && m.provider === 'anthropic') tools.push({ type: 'web_search_20260209', name: 'web_search', max_uses: CLAUDE_SEARCH_CAP });
+  } else {
   // 5) Chat und Nachrichten (alles serverseitig, Besitz wird geprüft)
-  let chatId = chatIdIn;
+  chatId = chatIdIn;
   if (chatId) {
     const { data: c } = await admin.from('chats').select('id').eq('id', chatId).eq('user_id', user.id).maybeSingle();
     if (!c) return fail('not_found', 404, 'Chat nicht gefunden.');
@@ -282,11 +317,7 @@ Deno.serve(async (req) => {
   }
 
   // Ab hier existiert der Chat: Fehlerantworten enthalten die Chat-ID, damit die App ihn öffnen kann.
-  const failChat = (code: string, status: number, message: string) =>
-    jsonResponse({ error: code, message, chat_id: chatId }, status);
 
-  let continueBase = '';
-  let continueThinking = '';
   // Wiederholte Anfrage-ID? Dann nichts doppelt tun.
   const dup = await admin.from('reservations').select('status').eq('request_id', requestId).maybeSingle();
   if (dup.data) return failChat('duplicate_request', 409, 'Diese Anfrage wurde bereits verarbeitet.');
@@ -306,7 +337,6 @@ Deno.serve(async (req) => {
     if (last?.[0]?.role === 'assistant') await admin.from('messages').delete().eq('id', last[0].id);
   }
 
-  let userMessageId: string | null = null;
   if (!regenerate && !continueId) {
     const { data: um, error: me } = await admin.from('messages')
       .insert({ chat_id: chatId, user_id: user.id, role: 'user', content: text || 'Bitte sieh dir die angehängten Dateien an.', request_id: requestId, model_id: modelId })
@@ -340,8 +370,6 @@ Deno.serve(async (req) => {
     return j.id as string;
   };
 
-  let nativeCount = 0, nativeBytes = 0, containerFiles: FileRow[] = [];
-  let history: Msg[];
   try {
     const nativeAllowed = new Set<string>();
     for (const f of [...chatFiles].reverse()) if (f.kind === 'upload' && classify(f) === 'native' && nativeAllowed.size < 6) nativeAllowed.add(f.id);
@@ -386,7 +414,7 @@ Deno.serve(async (req) => {
     console.error('chat: Dateivorbereitung', String(e));
     return failChat('file_upload_failed', 502, 'Eine Datei konnte nicht an den KI-Anbieter übertragen werden. Bitte versuche es erneut.');
   }
-  const usingCode = m.provider === 'anthropic' && (containerFiles.length > 0 || codeToolsWanted);
+  usingCode = m.provider === 'anthropic' && (containerFiles.length > 0 || codeToolsWanted);
   if (containerFiles.length && !usingCode) containerFiles = [];
   if (usingCode && containerFiles.length) {
     try {
@@ -399,9 +427,10 @@ Deno.serve(async (req) => {
       return failChat('file_upload_failed', 502, 'Eine Datei konnte nicht an den KI-Anbieter übertragen werden. Bitte versuche es erneut.');
     }
   }
-  const tools: Block[] = [];
   if (useSearch && m.provider === 'anthropic') tools.push({ type: 'web_search_20260209', name: 'web_search', max_uses: CLAUDE_SEARCH_CAP });
   if (usingCode) tools.push({ type: 'code_execution_20250825', name: 'code_execution' });
+
+  }
 
   const system =
     `Du bist ein hilfreicher KI-Assistent in der Anwendung "Fragio". Antworte in der Sprache des Nutzers. ` +
@@ -442,7 +471,7 @@ Deno.serve(async (req) => {
   const reduced = maxOut < m.max_output_cap;
 
   const resv = await admin.rpc('reserve_credit', {
-    p_request_id: requestId, p_user: user.id, p_chat: chatId, p_model_id: modelId,
+    p_request_id: requestId, p_user: user.id, p_chat: chatId || null, p_model_id: modelId,
     p_est_input: estInput, p_max_output: maxOut, p_search_cap: searchCap,
   });
   if (resv.error) {
@@ -498,7 +527,7 @@ Deno.serve(async (req) => {
       if (link && !seen.has(link)) { seen.add(link); sources.push({ title: title || link, url: link }); }
     };
 
-    send({ type: 'start', chat_id: chatId, user_message_id: userMessageId, request_id: requestId, max_output_tokens: maxOut, reduced, reserved_eur: reservedEur });
+    send({ type: 'start', chat_id: chatId || null, user_message_id: userMessageId, request_id: requestId, max_output_tokens: maxOut, reduced, reserved_eur: reservedEur });
 
     try {
       let res: Response;
@@ -675,7 +704,7 @@ Deno.serve(async (req) => {
         }).eq('id', continueId);
       }
       messageId = continueId;
-    } else if (answer.length > 0 || thinkText.length > 0 || genIds.size > 0) {
+    } else if (!ephemeral && (answer.length > 0 || thinkText.length > 0 || genIds.size > 0)) {
       const { data: am } = await admin.from('messages').insert({
         chat_id: chatId, user_id: user.id, role: 'assistant', content: answer, thinking: thinkText || null,
         status: msgStatus === 'error' ? 'truncated' : msgStatus, model_id: modelId, request_id: requestId,

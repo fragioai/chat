@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { ENTRY_LABELS, formatDate, formatEur } from '../lib/format.js';
+import { filesCall, formatBytes } from '../lib/files.js';
+import FilePreview from '../components/FilePreview.jsx';
 
 const DELETE_ERRORS = {
   balance_forfeit_required: 'Du hast noch Guthaben. Bestätige unten, dass es mit der Löschung verfällt.',
@@ -76,6 +78,16 @@ export default function AccountPage({ session }) {
   const [entriesMore, setEntriesMore] = useState(false);
   const [models, setModels] = useState([]);
   const [profile, setProfile] = useState(null);
+  const [nameInput, setNameInput] = useState('');
+  const [retention, setRetention] = useState('');
+  const [profileMsg, setProfileMsg] = useState(null);   // { ok } oder { err }
+  const [pw1, setPw1] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [pwMsg, setPwMsg] = useState(null);
+  const [pwBusy, setPwBusy] = useState(false);
+  const [files, setFiles] = useState([]);
+  const [fileQuota, setFileQuota] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [confirmText, setConfirmText] = useState('');
@@ -104,10 +116,12 @@ export default function AccountPage({ session }) {
     (async () => {
       setLoading(true);
       const [prof, mods] = await Promise.all([
-        supabase.from('profiles').select('display_name').maybeSingle(),
+        supabase.from('profiles').select('display_name, retention_days').maybeSingle(),
         supabase.functions.invoke('models'),
       ]);
       setProfile(prof.data);
+      setNameInput(prof.data?.display_name || '');
+      setRetention(prof.data?.retention_days ? String(prof.data.retention_days) : '');
       setModels(mods.data?.models || []);
       await Promise.all([loadUsage(true, 0), loadEntries(true, 0, '')]);
       setLoading(false);
@@ -121,6 +135,43 @@ export default function AccountPage({ session }) {
       else setSum(data);
     });
   }, [days]);
+
+  const loadFiles = useCallback(async () => {
+    const { data } = await supabase.from('files').select('id, name, size_bytes, kind, created_at, mime').order('created_at', { ascending: false }).limit(200);
+    setFiles(data || []);
+    try { setFileQuota(await filesCall('quota')); } catch { /* Anzeige ist optional */ }
+  }, []);
+  useEffect(() => { loadFiles(); }, [loadFiles]);
+
+  async function saveName(e) {
+    e.preventDefault();
+    const n = nameInput.trim().slice(0, 60);
+    if (!n) { setProfileMsg({ err: 'Bitte gib einen Namen ein.' }); return; }
+    const { error: err } = await supabase.from('profiles').update({ display_name: n }).eq('id', session.user.id);
+    if (err) setProfileMsg({ err: 'Der Name konnte nicht gespeichert werden.' });
+    else { setProfileMsg({ ok: 'Gespeichert.' }); setProfile((p) => ({ ...p, display_name: n })); }
+  }
+  async function saveRetention(v) {
+    setRetention(v);
+    const { error: err } = await supabase.from('profiles').update({ retention_days: v ? Number(v) : null }).eq('id', session.user.id);
+    setProfileMsg(err ? { err: 'Die Einstellung konnte nicht gespeichert werden.' } : { ok: 'Gespeichert.' });
+  }
+  async function savePassword(e) {
+    e.preventDefault();
+    setPwMsg(null);
+    if (pw1.length < 8) { setPwMsg({ err: 'Das Passwort muss mindestens 8 Zeichen haben.' }); return; }
+    if (pw1 !== pw2) { setPwMsg({ err: 'Die beiden Passwörter sind nicht gleich.' }); return; }
+    setPwBusy(true);
+    const { error: err } = await supabase.auth.updateUser({ password: pw1 });
+    setPwBusy(false);
+    if (err) setPwMsg({ err: 'Das Passwort konnte nicht geändert werden. Melde dich ab, wieder an und versuche es erneut.' });
+    else { setPwMsg({ ok: 'Passwort geändert.' }); setPw1(''); setPw2(''); }
+  }
+  async function removeFile(f) {
+    if (!window.confirm(`Datei „${f.name}“ endgültig löschen?`)) return;
+    try { await filesCall('delete', { file_id: f.id }); } catch (er) { setError(er.message); return; }
+    loadFiles();
+  }
 
   async function exportAll(kind) {
     setError('');
@@ -177,6 +228,7 @@ export default function AccountPage({ session }) {
   if (loading) return <p aria-busy="true">Wird geladen …</p>;
   const p = sum?.period;
   const balance = Number(sum?.balance_eur ?? 0);
+  const hasPassword = (session.user.app_metadata?.providers || ['email']).includes('email');
 
   return (
     <div className="stack">
@@ -188,6 +240,64 @@ export default function AccountPage({ session }) {
           <dt>Name</dt><dd>{profile?.display_name || '–'}</dd>
           <dt>E-Mail</dt><dd>{session.user.email}</dd>
         </dl>
+      </section>
+
+      <section className="card">
+        <h2>Profil</h2>
+        <form className="form" onSubmit={saveName}>
+          <label>Anzeigename ändern
+            <input value={nameInput} onChange={(e) => setNameInput(e.target.value)} maxLength={60} />
+          </label>
+          <button className="btn" type="submit">Anzeigename speichern</button>
+        </form>
+        {profileMsg && <p className={`msg ${profileMsg.err ? 'error' : 'ok'}`} role="status">{profileMsg.err || profileMsg.ok}</p>}
+      </section>
+
+      {hasPassword && (
+        <section className="card">
+          <h2>Passwort ändern</h2>
+          <form className="form" onSubmit={savePassword}>
+            <label>Neues Passwort (mindestens 8 Zeichen)
+              <input type="password" value={pw1} onChange={(e) => setPw1(e.target.value)} autoComplete="new-password" minLength={8} />
+            </label>
+            <label>Neues Passwort wiederholen
+              <input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" minLength={8} />
+            </label>
+            <button className="btn" type="submit" disabled={pwBusy}>{pwBusy ? 'Bitte warten …' : 'Passwort ändern'}</button>
+          </form>
+          {pwMsg && <p className={`msg ${pwMsg.err ? 'error' : 'ok'}`} role="status">{pwMsg.err || pwMsg.ok}</p>}
+        </section>
+      )}
+
+      <section className="card">
+        <h2>Chats automatisch löschen nach …</h2>
+        <label className="field"><span>Aufbewahrung</span>
+          <select value={retention} onChange={(e) => saveRetention(e.target.value)}>
+            <option value="">nie (Chats bleiben, bis ich sie lösche)</option>
+            <option value="30">30 Tagen</option>
+            <option value="90">90 Tagen</option>
+            <option value="365">365 Tagen</option>
+          </select>
+        </label>
+        <p className="muted tiny">Gerechnet ab der letzten Aktivität im Chat. Das Löschen läuft einmal täglich, ist endgültig und entfernt auch die Dateien des Chats. Abrechnungsdaten bleiben davon unberührt. Für einen einzelnen Chat ohne Speichern nutze im Verlauf „Chat ohne Speichern“.</p>
+      </section>
+
+      <section className="card">
+        <h2>Meine Dateien</h2>
+        {fileQuota && <p className="muted tiny">{formatBytes(fileQuota.used)} von {formatBytes(fileQuota.user_limit)} belegt. Höchstens {formatBytes(fileQuota.max_file)} pro Datei.</p>}
+        {files.length === 0 ? <p className="muted">Keine Dateien.</p> : (
+          <div className="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Art</th><th className="num">Größe</th><th /></tr></thead>
+            <tbody>{files.map((f) => (
+              <tr key={f.id}>
+                <td>{f.name}<span className="muted tiny"><br />{formatDate(f.created_at)}</span></td>
+                <td>{f.kind === 'generated' ? 'Erzeugt' : 'Hochgeladen'}</td>
+                <td className="num">{formatBytes(f.size_bytes)}</td>
+                <td><div className="row"><button className="btn small" onClick={() => setPreviewFile(f)}>Vorschau</button><button className="btn small ghost" onClick={() => removeFile(f)}>Löschen</button></div></td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        )}
       </section>
 
       <section className="card">
@@ -315,6 +425,7 @@ export default function AccountPage({ session }) {
           {deleting ? 'Wird gelöscht …' : 'Konto endgültig löschen'}
         </button>
       </section>
+      {previewFile && <FilePreview file={previewFile} onClose={() => setPreviewFile(null)} />}
     </div>
   );
 }

@@ -184,8 +184,6 @@ button.chip { cursor: pointer; }
 .detail { background: var(--bg); border-radius: 8px; padding: .25rem .5rem; }
 .detail td, .detail th { white-space: normal; }
 
-.btn.google { display: flex; align-items: center; justify-content: center; gap: .6rem; background: #fff; color: #1f1f1f; border: 1px solid #747775; font-weight: 500; }
-.btn.google:hover { background: #f6f8fc; }
 
 /* ---------- Extra A: Überlauf-Schutz, kompakter Chat, Menü ---------- */
 html, body { overflow-x: hidden; max-width: 100%; }
@@ -226,3 +224,21 @@ h1, h2, h3, p, li, dd, summary { overflow-wrap: anywhere; }
 .settings > summary::-webkit-details-marker { display: none; }
 .settings[open] > summary { margin-bottom: .4rem; }
 .settings .controls { padding-bottom: .25rem; }
+
+/* Google-Anmeldeknopf nach Googles Vorgaben (helle und dunkle Variante, offizielles "G") */
+.btn.google { display: flex; align-items: center; justify-content: center; gap: 10px; height: 40px; padding: 0 12px; border-radius: 4px; background: #fff; color: #1f1f1f; border: 1px solid #747775; font-weight: 500; font-size: 14px; line-height: 20px; }
+.btn.google:hover { background: #f6f8fc; }
+.btn.google .g { display: block; width: 20px; height: 20px; }
+.btn.google .g-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .btn.google { background: #131314; color: #e3e3e3; border-color: #8e918f; }
+  :root:not([data-theme='light']) .btn.google:hover { background: #1c1c1e; }
+  :root:not([data-theme='light']) .btn.google .g-light { display: none; }
+  :root:not([data-theme='light']) .btn.google .g-dark { display: block; }
+}
+:root[data-theme='dark'] .btn.google { background: #131314; color: #e3e3e3; border-color: #8e918f; }
+:root[data-theme='dark'] .btn.google:hover { background: #1c1c1e; }
+:root[data-theme='dark'] .btn.google .g-light { display: none; }
+:root[data-theme='dark'] .btn.google .g-dark { display: block; }
+
+.captcha { min-height: 65px; display: flex; justify-content: center; }

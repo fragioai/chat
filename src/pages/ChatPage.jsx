@@ -16,6 +16,7 @@ export default function ChatPage({ chatId }) {
   const [models, setModels] = useState([]);
   const [modelsError, setModelsError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ephemeral, setEphemeral] = useState(false);
   const [collapsed, setCollapsed] = useState(() => readLS('fragio-sidebar') === 'closed');
   const [modelId, setModelId] = useState(() => readLS(MODEL_KEY));
   const [effort, setEffort] = useState('');
@@ -133,6 +134,13 @@ export default function ChatPage({ chatId }) {
     loadMessages(chatId);
   }, [chatId, loadMessages]);
 
+  useEffect(() => {
+    if (!ephemeral || messages.length === 0) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [ephemeral, messages.length]);
+
   // ---------- Scrollen ----------
   function onScroll() {
     const el = scrollRef.current;
@@ -155,7 +163,80 @@ export default function ChatPage({ chatId }) {
   }, [messages, status]);
 
   // ---------- Senden ----------
+  async function sendEphemeral({ text = '', regenerate = false, editId = null }) {
+    if (streaming) return;
+    setError(''); setNotice(''); setStatus(''); setLost(null);
+    stick.current = true;
+    const requestId = crypto.randomUUID();
+    activeReq.current = requestId;
+    userStopped.current = false;
+    const { data: sess } = await supabase.auth.getSession();
+    if (!sess.session) { setError('Bitte melde dich erneut an.'); return; }
+    let base = messages.filter((m) => m.id !== 'streaming');
+    if (editId) {
+      const idx = base.findIndex((m) => m.id === editId);
+      if (idx >= 0) base = base.slice(0, idx);
+    } else if (regenerate && base.length && base[base.length - 1].role === 'assistant') {
+      base = base.slice(0, -1);
+    }
+    if (!regenerate) base.push({ id: `e-${requestId}`, role: 'user', content: text });
+    const hist = base.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content }));
+    setMessages([...base, { id: 'streaming', role: 'assistant', content: '', streaming: true }]);
+    setStreaming(true);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    let acc = '';
+    let think = '';
+    let done = null;
+    let failure = null;
+    try {
+      await streamChat(
+        { request_id: requestId, model_id: modelId, effort, web_search: webSearch, ephemeral: true, history: hist },
+        sess.session.access_token,
+        (ev) => {
+          if (ev.type === 'start' && ev.reduced) setNotice('Die Antwortlänge wurde wegen deines Guthabens begrenzt.');
+          else if (ev.type === 'delta') {
+            acc += ev.text; setStatus('');
+            setMessages((prev) => prev.map((m) => (m.id === 'streaming' ? { ...m, content: acc } : m)));
+          } else if (ev.type === 'thinking_delta') {
+            think += ev.text; setStatus('');
+            setMessages((prev) => prev.map((m) => (m.id === 'streaming' ? { ...m, thinking: think } : m)));
+          } else if (ev.type === 'thinking') setStatus((cur) => cur || 'Denkt nach …');
+          else if (ev.type === 'searching') setStatus('Sucht im Web …');
+          else if (ev.type === 'done') done = ev;
+          else if (ev.type === 'error') { failure = new Error(ev.message); failure.code = ev.code || 'provider_error'; }
+        },
+        ac.signal,
+      );
+    } catch (e) {
+      if (e.name !== 'AbortError') failure = e;
+    }
+    abortRef.current = null;
+    setStreaming(false);
+    setStatus('');
+    const stopped = userStopped.current;
+    if (failure) setError(failure.message || 'Die Anfrage ist fehlgeschlagen.');
+    else if (!done && !stopped) setNotice('Die Verbindung wurde unterbrochen. In einem Chat ohne Speichern geht diese Antwort verloren, bereits entstandene Kosten werden trotzdem berechnet. Bitte sende die Nachricht erneut.');
+    else if (stopped) setNotice('Gestoppt. Bis dahin entstandene Kosten werden berechnet.');
+    else if (done && done.status === 'truncated') setNotice('Die Antwort wurde gekürzt. Schreibe zum Beispiel „Bitte fahre fort“, damit das Modell weiterschreibt.');
+    const aid = `e-a-${requestId}`;
+    setMessages((prev) => prev
+      .map((m) => (m.id === 'streaming' ? { ...m, id: aid, streaming: false, status: done ? (done.status === 'complete' ? 'complete' : 'aborted') : 'aborted' } : m))
+      .filter((m) => !(m.role === 'assistant' && !m.content && !m.thinking)));
+    if (done) setMeta((p) => ({ ...p, [aid]: { charged: done.charged_eur, estimated: done.estimated, sources: done.sources || [], usage: done.usage } }));
+    loadBalance();
+  }
+
+  function startEphemeral() {
+    setSidebarOpen(false);
+    setEphemeral(true);
+    setMessages([]); setChatFiles([]); setAttachments([]); setMeta({});
+    setError(''); setNotice('');
+    window.location.hash = '#/';
+  }
+
   async function send({ text = '', regenerate = false, editId = null, continueId = null, sendFiles = [] }) {
+    if (ephemeral) { await sendEphemeral({ text, regenerate, editId }); return; }
     if (streaming) return;
     setError(''); setNotice(''); setStatus(''); setLost(null);
     stick.current = true;
@@ -371,8 +452,8 @@ export default function ChatPage({ chatId }) {
     if (window.innerWidth <= 760) { setSidebarOpen(true); return; }
     setCollapsed((c) => { writeLS('fragio-sidebar', c ? 'open' : 'closed'); return !c; });
   }
-  function openChat(id) { setSidebarOpen(false); window.location.hash = `#/chat/${id}`; }
-  function newChat() { setSidebarOpen(false); window.location.hash = '#/'; setMessages([]); setError(''); setNotice(''); }
+  function openChat(id) { setEphemeral(false); setSidebarOpen(false); window.location.hash = `#/chat/${id}`; }
+  function newChat() { setEphemeral(false); setSidebarOpen(false); window.location.hash = '#/'; setMessages([]); setError(''); setNotice(''); }
 
   // ---------- Anzeige ----------
   const last = messages[messages.length - 1];
@@ -392,7 +473,7 @@ export default function ChatPage({ chatId }) {
       <Sidebar
         chats={chats} activeId={chatId} query={query} onQuery={setQuery} hasMore={hasMore}
         onMore={() => loadChats(false)} onNew={newChat} onOpen={openChat} onRename={renameChat}
-        onDelete={deleteChat} collapsed={collapsed} open={sidebarOpen} onClose={() => setSidebarOpen(false)} loading={chatsLoading}
+        onDelete={deleteChat} onEphemeral={startEphemeral} collapsed={collapsed} open={sidebarOpen} onClose={() => setSidebarOpen(false)} loading={chatsLoading}
       />
       <section className="chat-main" aria-label="Chat">
         <div className="chat-bar">
@@ -402,6 +483,12 @@ export default function ChatPage({ chatId }) {
           </a>
         </div>
 
+        {ephemeral && (
+          <p className="msg warn compact" role="status">
+            <span>Chat ohne Speichern: Dieser Chat wird nicht gespeichert und ist weg, sobald du ihn verlässt oder die Seite neu lädst. Dateien und Code-Umgebung gehen hier nicht. Kosten werden normal berechnet.</span>
+            <button type="button" className="x" onClick={newChat} aria-label="Chat ohne Speichern beenden">×</button>
+          </p>
+        )}
         <div className="messages" ref={scrollRef} onScroll={onScroll} role="log" aria-live="polite">
           {messages.length === 0 && (
             <div className="empty">
@@ -463,7 +550,7 @@ export default function ChatPage({ chatId }) {
                       {m.role === 'user' && !m.id.startsWith('tmp-') && (
                         <button className="btn small ghost" disabled={streaming} onClick={() => { setEditing(m.id); setEditText(m.content); }}>Bearbeiten</button>
                       )}
-                      {m.role === 'assistant' && m.id === lastAssistantId && (m.status === 'truncated' || m.status === 'aborted') && !!m.content && !lost && (
+                      {m.role === 'assistant' && m.id === lastAssistantId && (m.status === 'truncated' || m.status === 'aborted') && !!m.content && !lost && !ephemeral && (
                         <button className="btn small primary" disabled={streaming} onClick={() => send({ continueId: m.id })}>Fortsetzen</button>
                       )}
                       {m.role === 'assistant' && m.id === lastAssistantId && !lost && (
@@ -548,7 +635,7 @@ export default function ChatPage({ chatId }) {
                 </select>
               </label>
             )}
-            {model && model.provider === 'anthropic' && (
+            {model && model.provider === 'anthropic' && !ephemeral && (
               <label className="check">
                 <input type="checkbox" checked={codeTools} onChange={(e) => setCodeTools(e.target.checked)} disabled={streaming} />
                 Dateien erzeugen und Code ausführen
@@ -580,7 +667,7 @@ export default function ChatPage({ chatId }) {
           )}
           <div className="input-row">
             <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
-            <button type="button" className="btn" onClick={() => fileInput.current && fileInput.current.click()} disabled={streaming || !model || model.provider !== 'anthropic'} aria-label="Dateien anhängen">Anhängen</button>
+            <button type="button" className="btn" onClick={() => fileInput.current && fileInput.current.click()} disabled={streaming || ephemeral || !model || model.provider !== 'anthropic'} aria-label="Dateien anhängen">Anhängen</button>
             <textarea
               ref={textareaRef} value={input} onChange={autosize} onKeyDown={onKeyDown} rows={1}
               placeholder="Nachricht an Fragio" aria-label="Nachricht" maxLength={32000} disabled={streaming}

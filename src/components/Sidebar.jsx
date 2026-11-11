@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { formatDate } from '../lib/format.js';
 
 export default function Sidebar({
-  chats, activeId, query, onQuery, hasMore, onMore, onNew, onOpen, onRename, onDelete, open, onClose, loading, collapsed,
+  chats, activeId, query, onQuery, hasMore, onMore, onNew, onOpen, onRename, onDelete, open, onClose, loading, collapsed, onEphemeral,
 }) {
   const [renamingId, setRenamingId] = useState(null);
   const [title, setTitle] = useState('');
@@ -26,6 +26,7 @@ export default function Sidebar({
       <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`} aria-label="Chatverlauf">
         <div className="sidebar-head">
           <button className="btn primary block" onClick={onNew}>Neuer Chat</button>
+          <button className="btn block" onClick={onEphemeral}>Chat ohne Speichern</button>
           <input
             type="search"
             placeholder="Chats durchsuchen"

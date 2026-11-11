@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import Logo from '../components/Logo.jsx';
 
 const redirectTo = window.location.origin + import.meta.env.BASE_URL;
+// Sicherheitsprüfung (Cloudflare Turnstile): nur aktiv, wenn VITE_TURNSTILE_SITE_KEY gesetzt ist.
+const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 // Google-Anmeldung ist vorerst ausgeschaltet. Einschalten: GitHub-Variable VITE_GOOGLE_LOGIN = true
 const GOOGLE_ENABLED = import.meta.env.VITE_GOOGLE_LOGIN === 'true';
 
@@ -10,6 +12,8 @@ function germanError(error) {
   const m = (error && error.message ? error.message : '').toLowerCase();
   if (m.includes('invalid login')) return 'E-Mail oder Passwort ist falsch.';
   if (m.includes('email not confirmed')) return 'Bitte bestätige zuerst deine E-Mail-Adresse (Link in der Bestätigungs-Mail).';
+  if (m.includes('captcha')) return 'Die Sicherheitsprüfung ist fehlgeschlagen. Bitte versuche es erneut.';
+  if (m.includes('signups not allowed') || m.includes('signup is disabled') || m.includes('signups are disabled')) return 'Die Registrierung ist derzeit geschlossen.';
   if (m.includes('rate limit') || m.includes('too many')) return 'Zu viele Versuche. Bitte warte einige Minuten und versuche es erneut.';
   if (m.includes('password') && m.includes('characters')) return 'Das Passwort ist zu kurz.';
   if (m.includes('network') || m.includes('failed to fetch')) return 'Keine Verbindung. Prüfe dein Internet und versuche es erneut.';
@@ -24,6 +28,50 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const widgetBox = useRef(null);
+  const widgetId = useRef(null);
+
+  useEffect(() => {
+    if (!SITE_KEY || recovery) return undefined;
+    let cancelled = false;
+    function mount() {
+      if (cancelled || !window.turnstile || !widgetBox.current || widgetId.current !== null) return;
+      widgetId.current = window.turnstile.render(widgetBox.current, {
+        sitekey: SITE_KEY, theme: 'auto', language: 'de',
+        callback: (t) => setCaptchaToken(t),
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => setCaptchaToken(''),
+      });
+    }
+    if (window.turnstile) mount();
+    else {
+      let el = document.getElementById('turnstile-script');
+      if (!el) {
+        el = document.createElement('script');
+        el.id = 'turnstile-script';
+        el.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        el.async = true;
+        document.head.appendChild(el);
+      }
+      el.addEventListener('load', mount);
+    }
+    return () => {
+      cancelled = true;
+      if (widgetId.current !== null && window.turnstile) {
+        try { window.turnstile.remove(widgetId.current); } catch { /* ignorieren */ }
+      }
+      widgetId.current = null;
+    };
+  }, [recovery]);
+
+  // Eine Bestätigung gilt nur für einen Versuch.
+  function resetCaptcha() {
+    setCaptchaToken('');
+    if (widgetId.current !== null && window.turnstile) {
+      try { window.turnstile.reset(widgetId.current); } catch { /* ignorieren */ }
+    }
+  }
 
   const switchMode = (m) => {
     setMode(m);
@@ -41,11 +89,13 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
       setError(germanError(e));
     } finally {
       setBusy(false);
+      if (SITE_KEY && !recovery) resetCaptcha();
     }
   }
 
   const submit = (e) => {
     e.preventDefault();
+    if (SITE_KEY && !recovery && !captchaToken) { setError('Bitte bestätige zuerst die Sicherheitsprüfung.'); return undefined; }
     if (recovery) {
       return run(async () => {
         if (password.length < 8) throw new Error('Das Passwort ist zu kurz (characters)');
@@ -56,7 +106,7 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
     }
     if (mode === 'login') {
       return run(async () => {
-        const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password, options: { captchaToken } });
         if (err) throw err;
       });
     }
@@ -66,7 +116,7 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
         const { data, error: err } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { display_name: name.trim().slice(0, 60) }, emailRedirectTo: redirectTo },
+          options: { data: { display_name: name.trim().slice(0, 60) }, emailRedirectTo: redirectTo, captchaToken },
         });
         if (err) throw err;
         if (!data.session) {
@@ -75,7 +125,7 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
       });
     }
     return run(async () => {
-      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo, captchaToken });
       if (err) throw err;
       setInfo('Wenn zu dieser E-Mail ein Konto existiert, haben wir einen Link zum Zurücksetzen geschickt.');
     });
@@ -128,6 +178,7 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
             />
           </label>
         )}
+        {SITE_KEY && !recovery && <div ref={widgetBox} className="captcha" aria-label="Sicherheitsprüfung" />}
         {error && <p className="msg error" role="alert">{error}</p>}
         {info && <p className="msg ok" role="status">{info}</p>}
         <button className="btn primary" disabled={busy} type="submit">
@@ -139,12 +190,8 @@ export default function AuthPage({ recovery, onRecoveryDone }) {
         <>
           <div className="divider"><span>oder</span></div>
           <button className="btn google" onClick={google} disabled={busy} type="button">
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
-              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
-              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
-              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
-            </svg>
+            <img className="g g-light" src={`${import.meta.env.BASE_URL}google-g-light.png`} width="20" height="20" alt="" />
+            <img className="g g-dark" src={`${import.meta.env.BASE_URL}google-g-dark.png`} width="20" height="20" alt="" />
             <span>Mit Google fortfahren</span>
           </button>
         </>

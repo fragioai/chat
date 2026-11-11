@@ -144,7 +144,10 @@ Deno.serve(async (req) => {
     const secret = Deno.env.get('CRON_SECRET') ?? '';
     const given = req.headers.get('x-cron-secret') ?? '';
     if (!secret || secret.length !== given.length || ![...secret].every((c, i) => c === given[i])) return fail('unauthorized', 401, 'Nicht erlaubt.');
-    const report = { removed_objects: 0, removed_provider: 0, abandoned: 0 };
+    const report = { removed_objects: 0, removed_provider: 0, abandoned: 0, chats_deleted: 0 };
+    // Chats nach der gewählten Aufbewahrung löschen (ihre Dateien werden dabei zum Löschen markiert)
+    const { data: delChats } = await db.rpc('purge_old_chats');
+    report.chats_deleted = Number(delChats) || 0;
     const { data: dead } = await db.from('files').select('id, storage_path, provider_file_id')
       .or(`deleted_at.not.is.null,and(status.eq.pending,created_at.lt.${new Date(Date.now() - 86400000).toISOString()}),status.eq.rejected`).limit(200);
     for (const f of dead ?? []) {
