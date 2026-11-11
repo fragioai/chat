@@ -15,7 +15,7 @@ function fixWidgetPosition() {
   if (!widget) return;
 
   widget.style.setProperty('position', 'fixed', 'important');
-  widget.style.setProperty('top', '58%', 'important');
+  widget.style.setProperty('top', '68%', 'important');
   widget.style.setProperty('right', '16px', 'important');
   widget.style.setProperty('bottom', 'auto', 'important');
   widget.style.setProperty('left', 'auto', 'important');
