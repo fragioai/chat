@@ -6,6 +6,20 @@
     <meta name="color-scheme" content="light dark" />
     <title>Fragio – KI-Chat</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+
+    <style>
+      /* Fragio-Widget: Immer rechts mittig */
+      #fragio-widget,
+      #fragio-widget button {
+        position: fixed !important;
+        right: 20px !important;
+        top: 50% !important;
+        bottom: auto !important;
+        left: auto !important;
+        transform: translateY(-50%) !important;
+        z-index: 999999 !important;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
