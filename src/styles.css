@@ -242,3 +242,19 @@ h1, h2, h3, p, li, dd, summary { overflow-wrap: anywhere; }
 :root[data-theme='dark'] .btn.google .g-dark { display: block; }
 
 .captcha { min-height: 65px; display: flex; justify-content: center; }
+
+/* ---------- Eingabe mit Plus-Menü, Symbolknöpfen ---------- */
+.input-wrap { position: relative; display: grid; gap: .15rem; }
+.input-row { align-items: flex-end; }
+.icon-btn { flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.icon-btn.send { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.icon-btn.stop { background: var(--danger); color: #fff; border-color: var(--danger); }
+.icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.plus-menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 25; width: min(92vw, 340px); max-height: 62dvh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: .5rem; display: grid; gap: .5rem; box-shadow: 0 8px 28px rgba(0,0,0,.3); }
+.menu-item { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 10px; padding: .6rem .5rem; min-height: 44px; cursor: pointer; }
+.menu-item:hover:not(:disabled) { background: var(--bg); }
+.menu-item:disabled { opacity: .5; cursor: not-allowed; }
+.menu-item .tiny { margin-left: auto; }
+.menu-sep { height: 1px; background: var(--border); }
+.plus-menu .field, .plus-menu .check { padding: 0 .25rem; }
+.modelcap { justify-self: start; background: none; border: 0; padding: .1rem .25rem .1rem 52px; color: var(--muted); font: inherit; font-size: .78rem; cursor: pointer; text-align: left; }

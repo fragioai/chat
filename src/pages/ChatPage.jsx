@@ -5,6 +5,7 @@ import { formatEur } from '../lib/format.js';
 import Markdown, { CopyButton } from '../components/Markdown.jsx';
 import Sidebar from '../components/Sidebar.jsx';
 import FilePreview from '../components/FilePreview.jsx';
+import { IconArrowUp, IconClip, IconPlus, IconStop } from '../components/Icons.jsx';
 import { ACCEPT, filesCall, formatBytes, uploadFile } from '../lib/files.js';
 
 const PAGE = 30;
@@ -17,6 +18,8 @@ export default function ChatPage({ chatId }) {
   const [modelsError, setModelsError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ephemeral, setEphemeral] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
   const [collapsed, setCollapsed] = useState(() => readLS('fragio-sidebar') === 'closed');
   const [modelId, setModelId] = useState(() => readLS(MODEL_KEY));
   const [effort, setEffort] = useState('');
@@ -140,6 +143,21 @@ export default function ChatPage({ chatId }) {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [ephemeral, messages.length]);
+
+  // Plus-Menü schließen: Tippen daneben oder Escape
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onDown = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   // ---------- Scrollen ----------
   function onScroll() {
@@ -608,74 +626,87 @@ export default function ChatPage({ chatId }) {
               ))}
             </div>
           )}
-          <details className="settings" open={settingsOpen} onToggle={(e) => setSettingsOpen(e.currentTarget.open)}>
-            <summary>
-              <span>{model ? model.display_name : 'Modell wählen'}</span>
-              {model && <span className="muted"> · {(model.efforts.find((x) => x.value === effort) || {}).label || ''}</span>}
-              {webSearch && <span className="muted"> · Suche</span>}
-              {model && model.provider === 'anthropic' && !codeTools && <span className="muted"> · ohne Dateierzeugung</span>}
-              <span className="muted"> · Einstellungen</span>
-            </summary>
-          <div className="controls">
-            <label className="field">
-              <span>Modell</span>
-              <select value={modelId} onChange={(e) => { setModelId(e.target.value); writeLS(MODEL_KEY, e.target.value); }} disabled={streaming}>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id} disabled={!m.available}>
-                    {m.display_name}{m.available ? '' : ' (nicht verfügbar)'}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {model && (
-              <label className="field">
-                <span>Denkstärke</span>
-                <select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={streaming}>
-                  {model.efforts.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
-                </select>
-              </label>
-            )}
-            {model && model.provider === 'anthropic' && !ephemeral && (
-              <label className="check">
-                <input type="checkbox" checked={codeTools} onChange={(e) => setCodeTools(e.target.checked)} disabled={streaming} />
-                Dateien erzeugen und Code ausführen
-              </label>
-            )}
-            {model && model.supports_web_search && (
-              <label className="check">
-                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} disabled={streaming} />
-                Websuche{model.search_eur_per_request != null ? ` (ca. ${formatEur(model.search_eur_per_request)} je Suche)` : ''}
-              </label>
-            )}
-          </div>
-          {model && (
-            <p className="muted tiny">
-              {model.description} Speed: {model.speed_class}, Reasoning: {model.reasoning_class}.
-              {model.price_eur_in != null && ` Preis je 1 Mio. Tokens: Eingabe ${formatEur(model.price_eur_in)}, Ausgabe ${formatEur(model.price_eur_out)} (inkl. Aufschlag).`}
-              {!model.available && model.unavailable_reason === 'provider_not_configured' && ' Dieses Modell ist noch nicht eingerichtet.'}
-              {!model.available && model.unavailable_reason !== 'provider_not_configured' && ' Gerade kein gültiger Preis, bitte später erneut versuchen.'}
-            </p>
-          )}
-
-            {quota && <p className="muted tiny">Dateispeicher: {formatBytes(quota.used)} von {formatBytes(quota.user_limit)} belegt. Höchstens {formatBytes(quota.max_file)} pro Datei.</p>}
-          </details>
           {worstCase !== null && (worstCase >= 0.25 || (balance !== null && worstCase > balance)) && (
             <p className="msg warn" role="status">
               Diese Anfrage kann bis zu ca. {formatEur(worstCase)} kosten (Obergrenze, meist deutlich weniger).
               {balance !== null && worstCase > balance ? ' Dein Guthaben reicht eventuell nicht für die volle Länge, die Antwort wird dann entsprechend gekürzt.' : ''}
             </p>
           )}
-          <div className="input-row">
-            <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
-            <button type="button" className="btn" onClick={() => fileInput.current && fileInput.current.click()} disabled={streaming || ephemeral || !model || model.provider !== 'anthropic'} aria-label="Dateien anhängen">Anhängen</button>
-            <textarea
-              ref={textareaRef} value={input} onChange={autosize} onKeyDown={onKeyDown} rows={1}
-              placeholder="Nachricht an Fragio" aria-label="Nachricht" maxLength={32000} disabled={streaming}
-            />
-            {streaming ? (
-              <button className="btn danger-btn" onClick={stop}>Stopp</button>
-            ) : (
-              <button className="btn primary" onClick={submit} disabled={(!input.trim() && !attachments.some((a) => a.id)) || !model || !model.available || attachments.some((a) => a.stage && !a.id && !a.error)}>Senden</button>
+          <div className="input-wrap" ref={menuRef}>
+            {menuOpen && (
+              <div className="plus-menu" role="group" aria-label="Optionen">
+                <button
+                  type="button" className="menu-item"
+                  onClick={() => { setMenuOpen(false); if (fileInput.current) fileInput.current.click(); }}
+                  disabled={streaming || ephemeral || !model || model.provider !== 'anthropic'}
+                >
+                  <IconClip />
+                  <span>Dateien anhängen</span>
+                  {quota && <span className="muted tiny">{formatBytes(quota.used)} von {formatBytes(quota.user_limit)}</span>}
+                </button>
+                <div className="menu-sep" />
+                <label className="field">
+                  <span>Modell</span>
+                  <select value={modelId} onChange={(e) => { setModelId(e.target.value); writeLS(MODEL_KEY, e.target.value); }} disabled={streaming}>
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id} disabled={!m.available}>{m.display_name}{m.available ? '' : ' (nicht verfügbar)'}</option>
+                    ))}
+                  </select>
+                </label>
+                {model && (
+                  <label className="field">
+                    <span>Denkstärke</span>
+                    <select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={streaming}>
+                      {model.efforts.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
+                    </select>
+                  </label>
+                )}
+                {model && model.supports_web_search && (
+                  <label className="check">
+                    <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} disabled={streaming} />
+                    Websuche{model.search_eur_per_request != null ? ` (ca. ${formatEur(model.search_eur_per_request)} je Suche)` : ''}
+                  </label>
+                )}
+                {model && model.provider === 'anthropic' && !ephemeral && (
+                  <label className="check">
+                    <input type="checkbox" checked={codeTools} onChange={(e) => setCodeTools(e.target.checked)} disabled={streaming} />
+                    Dateien erzeugen und Code ausführen
+                  </label>
+                )}
+                {model && (
+                  <p className="muted tiny">
+                    {model.description} Speed: {model.speed_class}, Reasoning: {model.reasoning_class}.
+                    {model.price_eur_in != null && ` Preis je 1 Mio. Tokens: Eingabe ${formatEur(model.price_eur_in)}, Ausgabe ${formatEur(model.price_eur_out)} (inkl. Aufschlag).`}
+                    {!model.available && model.unavailable_reason === 'provider_not_configured' && ' Dieses Modell ist noch nicht eingerichtet.'}
+                    {!model.available && model.unavailable_reason !== 'provider_not_configured' && ' Gerade kein gültiger Preis, bitte später erneut versuchen.'}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="input-row">
+              <input ref={fileInput} type="file" accept={ACCEPT} multiple hidden onChange={pickFiles} />
+              <button type="button" className="icon-btn" onClick={() => setMenuOpen((o) => !o)} aria-label="Optionen: Dateien anhängen, Modell, Denkstärke, Websuche" aria-haspopup="true" aria-expanded={menuOpen}>
+                <IconPlus />
+              </button>
+              <textarea
+                ref={textareaRef} value={input} onChange={autosize} onKeyDown={onKeyDown} rows={1}
+                placeholder="Nachricht an Fragio" aria-label="Nachricht" maxLength={32000} disabled={streaming}
+              />
+              {streaming ? (
+                <button type="button" className="icon-btn stop" onClick={stop} aria-label="Antwort stoppen"><IconStop /></button>
+              ) : (
+                <button
+                  type="button" className="icon-btn send" onClick={submit} aria-label="Senden"
+                  disabled={(!input.trim() && !attachments.some((a) => a.id)) || !model || !model.available || attachments.some((a) => a.stage && !a.id && !a.error)}
+                >
+                  <IconArrowUp />
+                </button>
+              )}
+            </div>
+            {model && (
+              <button type="button" className="modelcap" onClick={() => setMenuOpen(true)}>
+                {model.display_name} · {(model.efforts.find((x) => x.value === effort) || {}).label || ''}{webSearch ? ' · Suche' : ''}{ephemeral ? ' · ohne Speichern' : ''}
+              </button>
             )}
           </div>
         </div>
