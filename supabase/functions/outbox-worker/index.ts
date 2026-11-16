@@ -13,7 +13,7 @@ const b64url = (buf: ArrayBuffer | Uint8Array) =>
 const HEADERS: Record<string, string[]> = {
   Nutzung: ['Ereignis-ID', 'Zeit (UTC)', 'Nutzer-ID', 'E-Mail', 'Name', 'Modell', 'Eingabe-Tokens', 'Ausgabe-Tokens', 'Cache-lesen-Tokens',
     'Cache-schreiben-Tokens', 'Suchen', 'Anbieterkosten EUR', 'Aufschlag EUR', 'Wechselkurs-Aufschlag EUR', 'Gesamtkosten EUR',
-    'Abgebucht EUR', 'Reserviert EUR', 'Quelle', 'Ergebnis', 'Anfrage-ID'],
+    'Abgebucht EUR', 'Reserviert EUR', 'Quelle', 'Ergebnis', 'Anfrage-ID', 'Steuerzuschlag EUR'],
   Buchungen: ['Ereignis-ID', 'Zeit (UTC)', 'Nutzer-ID', 'E-Mail', 'Art', 'Betrag EUR', 'Bezug', 'Notiz'],
   Test: ['Ereignis-ID', 'Zeit (UTC)', 'Text'],
 };

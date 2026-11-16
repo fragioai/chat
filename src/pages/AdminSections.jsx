@@ -61,7 +61,7 @@ export function Overview() {
             <div className="stats">
               <Stat label="Anfragen" value={num(d.totals.requests)} sub={`${num(d.totals.estimated)} geschätzt abgerechnet`} />
               <Stat label="API-Grundkosten (EUR)" value={formatEur(d.totals.provider_cost_eur)} />
-              <Stat label="Aufschläge" value={formatEur(Number(d.totals.fx_surcharge_eur) + Number(d.totals.markup_eur))} sub={`Aufschlag ${formatEur(d.totals.markup_eur)}, Kurs ${formatEur(d.totals.fx_surcharge_eur)}`} />
+              <Stat label="Aufschläge und Steuerzuschlag" value={formatEur(Number(d.totals.fx_surcharge_eur) + Number(d.totals.markup_eur) + Number(d.totals.tax_eur || 0))} sub={`Aufschlag ${formatEur(d.totals.markup_eur)}, Kurs ${formatEur(d.totals.fx_surcharge_eur)}, Steuer ${formatEur(d.totals.tax_eur || 0)}`} />
               <Stat label="Abgebucht gesamt" value={formatEur(d.totals.charged_eur)} />
               <Stat label="Nicht belastet (zu deinen Lasten)" value={formatEur(d.totals.shortfall_eur)} warn={Number(d.totals.shortfall_eur) > 0} />
             </div>
@@ -340,6 +340,7 @@ const SETTING_LABELS = {
   max_file_bytes: 'Größte erlaubte Datei (Bytes, höchstens 6291456)', max_user_bytes: 'Speicher pro Nutzer (Bytes)',
   max_total_bytes: 'Gesamtspeicher aller Nutzer (Bytes)', max_files_per_message: 'Dateien pro Nachricht',
   provider_file_ttl_days: 'Kopien beim KI-Anbieter löschen nach (Tagen)',
+  provider_tax_percent: 'Steuerzuschlag des KI-Anbieters (%, auf die Anbieterkosten)',
 };
 export function Settings() {
   const { data, error, loading, reload } = useAdmin('settings_list', {}, []);

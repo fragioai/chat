@@ -53,6 +53,7 @@ function UsageDetail({ u }) {
           <tr><td colSpan={3}>Summe Anbieterkosten (Kurs 1 USD = {Number(u.eur_per_usd).toFixed(4)} EUR)</td><td className="num">{formatEur(u.provider_cost_eur)}</td></tr>
           <tr><td colSpan={3}>Aufschlag</td><td className="num">{formatEur(u.markup_eur)}</td></tr>
           <tr><td colSpan={3}>Wechselkurs-Aufschlag</td><td className="num">{formatEur(u.fx_surcharge_eur)}</td></tr>
+          {Number(u.tax_eur) > 0 && <tr><td colSpan={3}>Steuerzuschlag (Steuer des KI-Anbieters)</td><td className="num">{formatEur(u.tax_eur)}</td></tr>}
           <tr><td colSpan={3}><strong>Berechnet</strong></td><td className="num"><strong>{formatEur(u.charged_eur)}</strong></td></tr>
           <tr><td colSpan={3} className="muted">Vorab reserviert (Obergrenze)</td><td className="num muted">{formatEur(u.reserved_eur)}</td></tr>
         </tbody>
@@ -188,7 +189,7 @@ export default function AccountPage({ session }) {
         { key: 'input_tokens', label: 'Eingabe-Tokens' }, { key: 'output_tokens', label: 'Ausgabe-Tokens' },
         { key: 'cache_read_tokens', label: 'Cache-lesen-Tokens' }, { key: 'cache_write_tokens', label: 'Cache-schreiben-Tokens' },
         { key: 'search_requests', label: 'Suchen' }, { key: 'provider_cost_eur', label: 'Anbieterkosten EUR' },
-        { key: 'markup_eur', label: 'Aufschlag EUR' }, { key: 'fx_surcharge_eur', label: 'Wechselkurs-Aufschlag EUR' },
+        { key: 'markup_eur', label: 'Aufschlag EUR' }, { key: 'fx_surcharge_eur', label: 'Wechselkurs-Aufschlag EUR' }, { key: 'tax_eur', label: 'Steuerzuschlag EUR' },
         { key: 'charged_eur', label: 'Berechnet EUR' }, { key: 'reserved_eur', label: 'Reserviert EUR' },
         { key: 'usage_source', label: 'Quelle (provider=endgültig, estimated=geschätzt)', text: true },
       ], all);
@@ -324,7 +325,7 @@ export default function AccountPage({ session }) {
           <div className="stats">
             <div className="stat"><span className="muted">Anfragen</span><strong>{nf(p.requests)}</strong></div>
             <div className="stat"><span className="muted">Anbieterkosten</span><strong>{formatEur(p.provider_cost_eur)}</strong></div>
-            <div className="stat"><span className="muted">Aufschläge</span><strong>{formatEur(p.surcharges_eur)}</strong><span className="muted tiny">Aufschlag {formatEur(p.markup_eur)}, Kurs {formatEur(p.fx_surcharge_eur)}</span></div>
+            <div className="stat"><span className="muted">Aufschläge</span><strong>{formatEur(p.surcharges_eur)}</strong><span className="muted tiny">Aufschlag {formatEur(p.markup_eur)}, Kurs {formatEur(p.fx_surcharge_eur)}, Steuer {formatEur(p.tax_eur)}</span></div>
             <div className="stat"><span className="muted">Berechnet</span><strong>{formatEur(p.charged_eur)}</strong></div>
             <div className="stat"><span className="muted">davon geschätzt</span><strong>{formatEur(p.estimated_eur)}</strong><span className="muted tiny">{nf(p.estimated_requests)} Anfragen</span></div>
           </div>
@@ -342,7 +343,7 @@ export default function AccountPage({ session }) {
 
       <section className="card">
         <h2>Preise je Modell</h2>
-        <p className="muted tiny">Je 1 Million Tokens, in Euro, inklusive Aufschlag und Wechselkurs-Aufschlag. Die Aufteilung nach Kostenart siehst du bei jeder Anfrage.</p>
+        <p className="muted tiny">Je 1 Million Tokens, in Euro, inklusive Aufschlag, Wechselkurs-Aufschlag und Steuerzuschlag. Die Aufteilung nach Kostenart siehst du bei jeder Anfrage.</p>
         <div className="table-wrap"><table>
           <thead><tr><th>Modell</th><th className="num">Eingabe</th><th className="num">Ausgabe</th><th className="num">Suche je Anfrage</th></tr></thead>
           <tbody>{models.map((m) => (
